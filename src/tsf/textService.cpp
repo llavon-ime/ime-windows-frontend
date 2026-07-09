@@ -285,29 +285,48 @@ std::optional<std::u16string> printable_key_text(WPARAM wParam, LPARAM lParam) {
     return text.empty() ? std::nullopt : std::optional{text};
 }
 
+std::optional<std::u16string> shifted_printable_symbol_text(WPARAM wParam, LPARAM lParam) {
+    if (!key_down(VK_SHIFT) || key_down(VK_CONTROL) || key_down(VK_MENU) || modifier_key(wParam)) {
+        return std::nullopt;
+    }
+
+    if ((wParam >= 'A' && wParam <= 'Z') || wParam == VK_SPACE || (wParam >= VK_NUMPAD0 && wParam <= VK_DIVIDE)) {
+        return std::nullopt;
+    }
+
+    return printable_key_text(wParam, lParam);
+}
+
 std::optional<std::u16string> punctuation_shortcut(WPARAM wParam) {
     if (!key_down(VK_CONTROL) || key_down(VK_MENU) || modifier_key(wParam)) {
         return std::nullopt;
     }
 
+    // Follow the common Traditional Chinese IME punctuation layout used by
+    // Microsoft Bopomofo/Chewing-like tables: Ctrl selects punctuation for
+    // keys that are otherwise occupied by Bopomofo symbols.
     if (key_down(VK_SHIFT)) {
         switch (wParam) {
             case VK_OEM_COMMA:
-                return u"\u300A";
+                return u"《";
             case VK_OEM_PERIOD:
-                return u"\u300B";
+                return u"》";
             case VK_OEM_1:
-                return u"\uFF1A";
+                return u"：";
             case VK_OEM_7:
-                return u"\uFF02";
+                return u"＂";
             case VK_OEM_4:
-                return u"\uFF5B";
+                return u"『";
             case VK_OEM_6:
-                return u"\uFF5D";
+                return u"』";
             case '1':
-                return u"\uFF01";
+                return u"！";
+            case '9':
+                return u"（";
+            case '0':
+                return u"）";
             case VK_OEM_2:
-                return u"\uFF1F";
+                return u"？";
             default:
                 return std::nullopt;
         }
@@ -315,21 +334,21 @@ std::optional<std::u16string> punctuation_shortcut(WPARAM wParam) {
 
     switch (wParam) {
         case VK_OEM_COMMA:
-            return u"\uFF0C";
+            return u"，";
         case VK_OEM_PERIOD:
-            return u"\u3002";
+            return u"。";
         case VK_OEM_1:
-            return u"\uFF1B";
+            return u"；";
         case VK_OEM_7:
-            return u"\u3001";
+            return u"、";
         case VK_OEM_2:
-            return u"\u2026";
+            return u"？";
         case VK_OEM_MINUS:
-            return u"\u2014";
+            return u"—";
         case VK_OEM_4:
-            return u"\u3010";
+            return u"「";
         case VK_OEM_6:
-            return u"\u3011";
+            return u"」";
         default:
             return std::nullopt;
     }
@@ -579,7 +598,7 @@ STDMETHODIMP TextService::OnSetFocus(BOOL fForeground) try {
  *
  * Reports whether the service intends to consume the key-down event.
  */
-STDMETHODIMP TextService::OnTestKeyDown(ITfContext* /*pContext*/, WPARAM wParam, LPARAM /*lParam*/, BOOL* pfEaten) try {
+STDMETHODIMP TextService::OnTestKeyDown(ITfContext* /*pContext*/, WPARAM wParam, LPARAM lParam, BOOL* pfEaten) try {
     if (!pfEaten) return E_INVALIDARG;
     DebugSink::instance().send(L"EVENT", L"OnTestKeyDown key=" + std::to_wstring(wParam));
 
@@ -600,6 +619,11 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* /*pContext*/, WPARAM wParam,
     }
 
     if (punctuation_shortcut(wParam)) {
+        *pfEaten = TRUE;
+        return S_OK;
+    }
+
+    if (shifted_printable_symbol_text(wParam, lParam)) {
         *pfEaten = TRUE;
         return S_OK;
     }
@@ -697,6 +721,21 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* pContext, WPARAM wParam, LPARAM 
 
     if (const auto punctuation = punctuation_shortcut(wParam)) {
         compositionBuffer.add_chosen_candidate((*punctuation)[0]);
+        set_composition_text(pContext, compositionBuffer.to_string());
+        *pfEaten = TRUE;
+        return S_OK;
+    }
+
+    if (const auto symbol = shifted_printable_symbol_text(wParam, lParam)) {
+        if (compositionBuffer.empty()) {
+            insert_text(pContext, *symbol);
+            *pfEaten = TRUE;
+            return S_OK;
+        }
+
+        for (const char16_t ch : *symbol) {
+            compositionBuffer.add_chosen_candidate(ch);
+        }
         set_composition_text(pContext, compositionBuffer.to_string());
         *pfEaten = TRUE;
         return S_OK;
