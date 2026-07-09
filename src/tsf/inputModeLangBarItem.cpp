@@ -9,10 +9,6 @@ namespace {
 constexpr DWORD kSinkCookie = 1;
 constexpr int kIconSize = 16;
 
-COLORREF mode_background(InputMode mode) {
-    return mode == InputMode::Chinese ? RGB(0, 96, 104) : RGB(64, 64, 64);
-}
-
 }  // namespace
 
 InputModeLangBarItem::InputModeLangBarItem(std::function<void()> on_click) : on_click_(std::move(on_click)) {
@@ -218,7 +214,16 @@ HICON InputModeLangBarItem::create_mode_icon() const {
         return nullptr;
     }
 
-    HBITMAP color_bitmap = CreateCompatibleBitmap(screen_dc, kIconSize, kIconSize);
+    BITMAPINFO bitmap_info = {};
+    bitmap_info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    bitmap_info.bmiHeader.biWidth = kIconSize;
+    bitmap_info.bmiHeader.biHeight = -kIconSize;
+    bitmap_info.bmiHeader.biPlanes = 1;
+    bitmap_info.bmiHeader.biBitCount = 32;
+    bitmap_info.bmiHeader.biCompression = BI_RGB;
+
+    void* bits = nullptr;
+    HBITMAP color_bitmap = CreateDIBSection(screen_dc, &bitmap_info, DIB_RGB_COLORS, &bits, nullptr, 0);
     HBITMAP mask_bitmap = CreateBitmap(kIconSize, kIconSize, 1, 1, nullptr);
     if (!color_bitmap || !mask_bitmap) {
         if (color_bitmap) {
@@ -233,10 +238,8 @@ HICON InputModeLangBarItem::create_mode_icon() const {
     }
 
     HGDIOBJ old_bitmap = SelectObject(memory_dc, color_bitmap);
-    HBRUSH brush = CreateSolidBrush(mode_background(mode_));
     RECT rect = {0, 0, kIconSize, kIconSize};
-    FillRect(memory_dc, &rect, brush);
-    DeleteObject(brush);
+    FillRect(memory_dc, &rect, reinterpret_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
 
     SetBkMode(memory_dc, TRANSPARENT);
     SetTextColor(memory_dc, RGB(255, 255, 255));
@@ -249,6 +252,15 @@ HICON InputModeLangBarItem::create_mode_icon() const {
     }
 
     DrawTextW(memory_dc, mode_label(), -1, &rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOCLIP);
+
+    if (bits) {
+        auto* pixels = static_cast<unsigned char*>(bits);
+        for (int i = 0; i < kIconSize * kIconSize; ++i) {
+            unsigned char* pixel = pixels + i * 4;
+            const bool text_pixel = pixel[0] != 0 || pixel[1] != 0 || pixel[2] != 0;
+            pixel[3] = text_pixel ? 255 : 0;
+        }
+    }
 
     if (old_font) {
         SelectObject(memory_dc, old_font);
