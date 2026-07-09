@@ -3,11 +3,15 @@
 #include <windows.h>
 
 #include <cstdint>
+#include <filesystem>
+#include <optional>
 #include <span>
+#include <string>
 #include <vector>
 
 #include "core/bopomofo.hpp"
 #include "engine.h"
+#include "system/globals.h"
 
 namespace tsf {
 
@@ -20,12 +24,129 @@ enum class PipeCommand : uint8_t {
 
 class PipeEngine : public IEngine {
     static inline HANDLE hPipe = INVALID_HANDLE_VALUE;
+    static constexpr const wchar_t* pipe_name = L"\\\\.\\pipe\\llavon-ime";
+    static constexpr const wchar_t* launch_mutex_name = L"Local\\LlavonImeBackendStart";
+
+    static std::optional<std::filesystem::path> dll_dir() {
+        if (!tsf::Globals::hinstance) {
+            return std::nullopt;
+        }
+
+        std::wstring buffer(MAX_PATH, L'\0');
+        for (;;) {
+            const DWORD copied =
+                GetModuleFileNameW(tsf::Globals::hinstance, buffer.data(), static_cast<DWORD>(buffer.size()));
+            if (copied == 0) {
+                return std::nullopt;
+            }
+
+            if (copied < static_cast<DWORD>(buffer.size() - 1)) {
+                buffer.resize(copied);
+                return std::filesystem::path(buffer).parent_path();
+            }
+
+            buffer.resize(buffer.size() * 2);
+        }
+    }
+
+    static std::optional<std::filesystem::path> env_path(const wchar_t* name) {
+        const DWORD required = GetEnvironmentVariableW(name, nullptr, 0);
+        if (required == 0) {
+            return std::nullopt;
+        }
+
+        std::wstring value(required, L'\0');
+        const DWORD copied = GetEnvironmentVariableW(name, value.data(), required);
+        if (copied == 0) {
+            return std::nullopt;
+        }
+
+        value.resize(copied);
+        return std::filesystem::path(value);
+    }
+
+    static std::optional<std::filesystem::path> service_exe_path() {
+        std::error_code ec;
+        if (auto configured = env_path(L"LLAVON_IME_SERVICE_PATH")) {
+            if (std::filesystem::is_regular_file(*configured, ec)) {
+                return configured;
+            }
+        }
+
+        if (auto module_dir = dll_dir()) {
+            auto candidate = *module_dir / "llavon-ime-service.exe";
+            if (std::filesystem::is_regular_file(candidate, ec)) {
+                return candidate;
+            }
+        }
+
+        return std::nullopt;
+    }
+
+    static bool connect_pipe() {
+        hPipe = CreateFileW(pipe_name, GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
+        return hPipe != INVALID_HANDLE_VALUE;
+    }
+
+    static bool launch_backend() {
+        const auto exe_path = service_exe_path();
+        if (!exe_path) {
+            return false;
+        }
+
+        std::wstring command_line = L"\"" + exe_path->wstring() + L"\"";
+        std::wstring working_dir = exe_path->parent_path().wstring();
+
+        STARTUPINFOW startup_info{};
+        startup_info.cb = sizeof(startup_info);
+
+        PROCESS_INFORMATION process_info{};
+        const BOOL ok =
+            CreateProcessW(nullptr, command_line.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr,
+                           working_dir.empty() ? nullptr : working_dir.c_str(), &startup_info, &process_info);
+        if (!ok) {
+            return false;
+        }
+
+        CloseHandle(process_info.hThread);
+        CloseHandle(process_info.hProcess);
+        return true;
+    }
+
+    static bool retry_connect_pipe() {
+        for (int i = 0; i < 20; ++i) {
+            if (connect_pipe()) {
+                return true;
+            }
+            Sleep(100);
+        }
+        return false;
+    }
 
     static bool ensure_pipe() {
         if (hPipe != INVALID_HANDLE_VALUE) return true;
-        hPipe = CreateFileW(L"\\\\.\\pipe\\llavon-ime", GENERIC_READ | GENERIC_WRITE,
-                            0, nullptr, OPEN_EXISTING, 0, nullptr);
-        return hPipe != INVALID_HANDLE_VALUE;
+        if (connect_pipe()) return true;
+
+        HANDLE launch_mutex = CreateMutexW(nullptr, FALSE, launch_mutex_name);
+        if (!launch_mutex) {
+            launch_backend();
+            return retry_connect_pipe();
+        }
+
+        const DWORD wait_result = WaitForSingleObject(launch_mutex, 0);
+        const bool owns_launch = wait_result == WAIT_OBJECT_0 || wait_result == WAIT_ABANDONED;
+        if (owns_launch) {
+            if (!connect_pipe()) {
+                launch_backend();
+            }
+            const bool connected = retry_connect_pipe();
+            ReleaseMutex(launch_mutex);
+            CloseHandle(launch_mutex);
+            return connected;
+        }
+
+        CloseHandle(launch_mutex);
+        return retry_connect_pipe();
     }
 
     static void disconnect() {
