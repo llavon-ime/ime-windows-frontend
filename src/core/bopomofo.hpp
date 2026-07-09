@@ -9,8 +9,10 @@
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 #include "jsoncons/json.hpp"
+#include "system/globals.h"
 #include "utf8cpp/utf8/cpp20.h"
 #include "utils/debugSink.hpp"
 
@@ -160,24 +162,88 @@ public:
     }
 
 private:
+    static std::optional<std::filesystem::path> env_path(const wchar_t* name) {
+        const DWORD required = GetEnvironmentVariableW(name, nullptr, 0);
+        if (required == 0) {
+            return std::nullopt;
+        }
+
+        std::wstring value(required, L'\0');
+        const DWORD copied = GetEnvironmentVariableW(name, value.data(), required);
+        if (copied == 0) {
+            return std::nullopt;
+        }
+
+        value.resize(copied);
+        return std::filesystem::path(value);
+    }
+
+    static std::optional<std::filesystem::path> dll_dir() {
+        if (!tsf::Globals::hinstance) {
+            return std::nullopt;
+        }
+
+        std::wstring buffer(MAX_PATH, L'\0');
+        for (;;) {
+            const DWORD copied =
+                GetModuleFileNameW(tsf::Globals::hinstance, buffer.data(), static_cast<DWORD>(buffer.size()));
+            if (copied == 0) {
+                return std::nullopt;
+            }
+
+            if (copied < buffer.size() - 1) {
+                buffer.resize(copied);
+                return std::filesystem::path(buffer).parent_path();
+            }
+
+            buffer.resize(buffer.size() * 2);
+        }
+    }
+
+    static std::optional<std::filesystem::path> first_existing_file(
+        const std::vector<std::filesystem::path>& candidates) {
+        for (const auto& candidate : candidates) {
+            if (std::filesystem::is_regular_file(candidate)) {
+                return candidate;
+            }
+        }
+        return std::nullopt;
+    }
+
     static std::filesystem::path resolve_mapping_file(std::source_location loc = std::source_location::current()) {
+        std::vector<std::filesystem::path> candidates;
+
+        if (auto tables_dir = env_path(L"LLAVON_IME_TABLES_DIR")) {
+            candidates.push_back(*tables_dir / "bopomofo_char.json");
+        }
+
+        if (auto module_dir = dll_dir()) {
+            candidates.push_back(module_dir->parent_path() / "tables" / "bopomofo_char.json");
+        }
+
         std::filesystem::path this_file = std::filesystem::path(loc.file_name()).lexically_normal();
         if (this_file.is_relative()) {
             this_file = std::filesystem::absolute(this_file).lexically_normal();
         }
 
-        // tsf/src/core/bopomofoBuffer.hpp -> project root
-        std::filesystem::path project_root = this_file.parent_path().parent_path().parent_path().parent_path();
-        std::filesystem::path mapping_file = project_root / "tables" / "bopomofo_char.json";
-        if (!std::filesystem::exists(mapping_file)) {
-            throw std::runtime_error("Mapping file not found: " + mapping_file.string());
+        const std::filesystem::path project_root = this_file.parent_path().parent_path().parent_path().parent_path();
+        candidates.push_back(project_root / "table" / "bopomofo_char.json");
+        candidates.push_back(project_root / "tables" / "bopomofo_char.json");
+
+        if (const auto mapping_file = first_existing_file(candidates)) {
+            return *mapping_file;
         }
-        return mapping_file;
+
+        std::string message = "Mapping file not found. Checked:";
+        for (const auto& candidate : candidates) {
+            message += "\n  " + candidate.string();
+        }
+        throw std::runtime_error(message);
     }
 
     HanziMapEngine() {
         std::filesystem::path mapping_file = resolve_mapping_file();
-        std::ifstream ifs(mapping_file.string());
+        std::ifstream ifs(mapping_file);
         jsoncons::json j = jsoncons::json::parse(ifs);
         auto temp = j.as<std::unordered_map<std::string, std::vector<std::string>>>();
         for (auto& [k, v] : temp) {
