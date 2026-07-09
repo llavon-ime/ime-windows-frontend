@@ -9,6 +9,7 @@
 #include "core/bopomofo.hpp"
 #include "editSession.hpp"
 #include "engine/engine.hpp"
+#include "inputModeLangBarItem.hpp"
 #include "system/globals.h"
 #include "utils/debugSink.hpp"
 #include "utils/healper.hpp"
@@ -388,6 +389,14 @@ HRESULT TextService::activate(ITfThreadMgr* pThreadMgr, TfClientId tfClientId) {
     _tfClientId = tfClientId;
     candidate_ui_->attach(pThreadMgr, tfClientId);
 
+    input_mode_lang_bar_item_ = winrt::make_self<InputModeLangBarItem>([this]() {
+        get_engine()->toggle_input_mode();
+        const InputMode mode = refresh_input_mode_indicator();
+        DebugSink::instance().send(L"MODE", mode == InputMode::Chinese ? L"Chinese" : L"English");
+    });
+    input_mode_lang_bar_item_->add_to_language_bar(threadMgr.get());
+    refresh_input_mode_indicator();
+
     winrt::com_ptr<ITfSource> itfSource;
     HRESULT hr = threadMgr->QueryInterface<ITfSource>(itfSource.put());
     if (FAILED(hr)) {
@@ -438,6 +447,11 @@ void TextService::deactivate() {
     compositionBuffer.clear();
 
     if (threadMgr) {
+        if (input_mode_lang_bar_item_) {
+            input_mode_lang_bar_item_->remove_from_language_bar(threadMgr.get());
+            input_mode_lang_bar_item_ = nullptr;
+        }
+
         winrt::com_ptr<ITfKeystrokeMgr> itfKeystrokeMgr;
         if (SUCCEEDED(threadMgr->QueryInterface<ITfKeystrokeMgr>(itfKeystrokeMgr.put()))) {
             itfKeystrokeMgr->UnadviseKeyEventSink(_tfClientId);
@@ -455,6 +469,47 @@ void TextService::deactivate() {
     }
     _tfClientId = TF_CLIENTID_NULL;
     candidate_ui_->detach();
+}
+
+InputMode TextService::read_backend_input_mode() {
+    return refresh_input_mode_indicator();
+}
+
+InputMode TextService::refresh_input_mode_indicator() {
+    const InputMode mode = get_engine()->current_input_mode();
+    if (input_mode_lang_bar_item_) {
+        input_mode_lang_bar_item_->set_mode(mode);
+    }
+    sync_input_mode_compartments(mode);
+    return mode;
+}
+
+void TextService::sync_input_mode_compartments(InputMode mode) {
+    if (!threadMgr || _tfClientId == TF_CLIENTID_NULL) {
+        return;
+    }
+
+    winrt::com_ptr<ITfCompartmentMgr> compartment_mgr;
+    if (FAILED(threadMgr->QueryInterface(IID_PPV_ARGS(compartment_mgr.put())))) {
+        return;
+    }
+
+    const auto set_compartment = [&](REFGUID guid, LONG value) {
+        winrt::com_ptr<ITfCompartment> compartment;
+        if (FAILED(compartment_mgr->GetCompartment(guid, compartment.put()))) {
+            return;
+        }
+
+        VARIANT variant;
+        VariantInit(&variant);
+        variant.vt = VT_I4;
+        variant.lVal = value;
+        compartment->SetValue(_tfClientId, &variant);
+    };
+
+    set_compartment(GUID_COMPARTMENT_KEYBOARD_OPENCLOSE, mode == InputMode::Chinese ? TRUE : FALSE);
+    set_compartment(GUID_COMPARTMENT_KEYBOARD_INPUTMODE_CONVERSION,
+                    mode == InputMode::Chinese ? TF_CONVERSIONMODE_NATIVE : 0);
 }
 
 /**
@@ -481,7 +536,7 @@ STDMETHODIMP TextService::OnUninitDocumentMgr(ITfDocumentMgr* /*pDocMgr*/) try {
  * Receives document focus changes but does not react to them yet.
  */
 STDMETHODIMP TextService::OnSetFocus(ITfDocumentMgr* /*pDocMgrFocus*/, ITfDocumentMgr* /*pDocMgrPrevFocus*/) try {
-    // TODO: Initialize or clear per-document state on focus switch.
+    refresh_input_mode_indicator();
     return S_OK;
 } catch (...) {
     return handle_com_exception();
@@ -510,7 +565,12 @@ STDMETHODIMP TextService::OnPopContext(ITfContext* /*pContext*/) try { return S_
  *
  * Tracks foreground changes but currently keeps no extra state.
  */
-STDMETHODIMP TextService::OnSetFocus(BOOL /*fForeground*/) try { return S_OK; } catch (...) {
+STDMETHODIMP TextService::OnSetFocus(BOOL fForeground) try {
+    if (fForeground) {
+        refresh_input_mode_indicator();
+    }
+    return S_OK;
+} catch (...) {
     return handle_com_exception();
 }
 
@@ -533,7 +593,7 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* /*pContext*/, WPARAM wParam,
         shift_used_as_modifier_ = true;
     }
 
-    const bool english_mode = get_engine()->current_input_mode() == InputMode::English;
+    const bool english_mode = read_backend_input_mode() == InputMode::English;
     if (english_mode && compositionBuffer.empty()) {
         *pfEaten = (punctuation_shortcut(wParam) || english_printable_key(wParam)) ? TRUE : FALSE;
         return S_OK;
@@ -618,7 +678,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* pContext, WPARAM wParam, LPARAM 
         shift_used_as_modifier_ = true;
     }
 
-    const bool english_mode = get_engine()->current_input_mode() == InputMode::English;
+    const bool english_mode = read_backend_input_mode() == InputMode::English;
     if (english_mode && compositionBuffer.empty()) {
         if (const auto punctuation = punctuation_shortcut(wParam)) {
             insert_text(pContext, *punctuation);
@@ -776,7 +836,8 @@ STDMETHODIMP TextService::OnKeyUp(ITfContext* /*pContext*/, WPARAM wParam, LPARA
     if (!pfEaten) return E_INVALIDARG;
     if (shift_key(wParam) && shift_toggle_pending_) {
         if (!shift_used_as_modifier_) {
-            const InputMode mode = get_engine()->toggle_input_mode();
+            get_engine()->toggle_input_mode();
+            const InputMode mode = refresh_input_mode_indicator();
             DebugSink::instance().send(L"MODE", mode == InputMode::Chinese ? L"Chinese" : L"English");
         }
 

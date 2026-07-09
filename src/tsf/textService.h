@@ -10,10 +10,12 @@
 #include <vector>
 
 #include "core/buffer.hpp"
+#include "engine/impl/engine.h"
 
 namespace tsf {
 
 class CandidateUiController;
+class InputModeLangBarItem;
 
 // clang-format off
 class TextService : 
@@ -73,12 +75,16 @@ private:
     void show_candidate_list_for_current_input(ITfContext* pContext, bool expand);
     void show_candidate_list(BopomofoPos& pos, ITfContext* pContext);
     std::u16string get_pre_composit_context(ITfContext* pContext);
+    InputMode read_backend_input_mode();
+    InputMode refresh_input_mode_indicator();
+    void sync_input_mode_compartments(InputMode mode);
 
     winrt::com_ptr<ITfThreadMgr> threadMgr;
     TfClientId _tfClientId = TF_CLIENTID_NULL;
     DWORD dwThreadMgrEventSinkCookie = TF_INVALID_COOKIE;
     winrt::com_ptr<ITfComposition> itfComposition;
     std::unique_ptr<CandidateUiController> candidate_ui_;
+    winrt::com_ptr<InputModeLangBarItem> input_mode_lang_bar_item_;
     CompositionBuffer compositionBuffer;
     bool shift_toggle_pending_ = false;
     bool shift_used_as_modifier_ = false;

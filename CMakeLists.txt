@@ -43,6 +43,7 @@ target_link_libraries(llavon-ime PRIVATE
     advapi32    # Registry API
     ole32       # COM
     oleaut32    # COM Automation
+    uuid        # TSF GUID constants
     ws2_32      # Winsock2 (DebugSink)
 
     jsoncons
