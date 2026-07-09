@@ -42,7 +42,6 @@ public:
 
 private:
     void notify_update(DWORD flags);
-    HICON create_mode_icon() const;
     const wchar_t* mode_label() const;
     const wchar_t* tooltip_text() const;
 

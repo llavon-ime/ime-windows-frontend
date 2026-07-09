@@ -2,15 +2,16 @@ cmake_minimum_required(VERSION 3.24)
 
 project(ime_windows_frontend
     VERSION 0.1.0
-    LANGUAGES CXX)
+    LANGUAGES CXX RC)
 
 file(GLOB_RECURSE HEADERS CONFIGURE_DEPENDS "src/*.h" "src/*.hpp")
 file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS "src/*.cpp")
+file(GLOB_RECURSE RESOURCES CONFIGURE_DEPENDS "src/*.rc")
 set(DEF_FILE "${CMAKE_CURRENT_SOURCE_DIR}/src/ime.def")
 
 include_directories(src)
 
-add_library(llavon-ime SHARED ${SOURCES} ${HEADERS} ${DEF_FILE})
+add_library(llavon-ime SHARED ${SOURCES} ${HEADERS} ${RESOURCES} ${DEF_FILE})
 target_compile_features(llavon-ime PRIVATE cxx_std_23)
 set_target_properties(llavon-ime PROPERTIES
     CXX_STANDARD_REQUIRED YES

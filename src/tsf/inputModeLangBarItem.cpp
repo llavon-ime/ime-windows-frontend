@@ -2,12 +2,13 @@
 
 #include <strsafe.h>
 
+#include "resource.h"
+
 namespace tsf {
 
 namespace {
 
 constexpr DWORD kSinkCookie = 1;
-constexpr int kIconSize = 16;
 
 }  // namespace
 
@@ -83,7 +84,7 @@ void InputModeLangBarItem::set_mode(InputMode mode) {
     }
 
     mode_ = mode;
-    notify_update(TF_LBI_TEXT | TF_LBI_ICON | TF_LBI_TOOLTIP);
+    notify_update(TF_LBI_ICON | TF_LBI_TEXT | TF_LBI_TOOLTIP);
 }
 
 STDMETHODIMP InputModeLangBarItem::GetInfo(TF_LANGBARITEMINFO* info) {
@@ -147,7 +148,11 @@ STDMETHODIMP InputModeLangBarItem::GetIcon(HICON* icon) {
         return E_INVALIDARG;
     }
 
-    *icon = create_mode_icon();
+    const int icon_id = mode_ == InputMode::Chinese ? IDI_INPUT_MODE_CHINESE : IDI_INPUT_MODE_ENGLISH;
+    const int icon_width = GetSystemMetrics(SM_CXSMICON);
+    const int icon_height = GetSystemMetrics(SM_CYSMICON);
+    *icon = reinterpret_cast<HICON>(LoadImageW(Globals::hinstance, MAKEINTRESOURCEW(icon_id), IMAGE_ICON, icon_width,
+                                               icon_height, LR_DEFAULTCOLOR));
     return *icon ? S_OK : E_FAIL;
 }
 
@@ -200,87 +205,6 @@ void InputModeLangBarItem::notify_update(DWORD flags) {
     if (sink_) {
         sink_->OnUpdate(flags);
     }
-}
-
-HICON InputModeLangBarItem::create_mode_icon() const {
-    HDC screen_dc = GetDC(nullptr);
-    if (!screen_dc) {
-        return nullptr;
-    }
-
-    HDC memory_dc = CreateCompatibleDC(screen_dc);
-    if (!memory_dc) {
-        ReleaseDC(nullptr, screen_dc);
-        return nullptr;
-    }
-
-    BITMAPINFO bitmap_info = {};
-    bitmap_info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-    bitmap_info.bmiHeader.biWidth = kIconSize;
-    bitmap_info.bmiHeader.biHeight = -kIconSize;
-    bitmap_info.bmiHeader.biPlanes = 1;
-    bitmap_info.bmiHeader.biBitCount = 32;
-    bitmap_info.bmiHeader.biCompression = BI_RGB;
-
-    void* bits = nullptr;
-    HBITMAP color_bitmap = CreateDIBSection(screen_dc, &bitmap_info, DIB_RGB_COLORS, &bits, nullptr, 0);
-    HBITMAP mask_bitmap = CreateBitmap(kIconSize, kIconSize, 1, 1, nullptr);
-    if (!color_bitmap || !mask_bitmap) {
-        if (color_bitmap) {
-            DeleteObject(color_bitmap);
-        }
-        if (mask_bitmap) {
-            DeleteObject(mask_bitmap);
-        }
-        DeleteDC(memory_dc);
-        ReleaseDC(nullptr, screen_dc);
-        return nullptr;
-    }
-
-    HGDIOBJ old_bitmap = SelectObject(memory_dc, color_bitmap);
-    RECT rect = {0, 0, kIconSize, kIconSize};
-    FillRect(memory_dc, &rect, reinterpret_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
-
-    SetBkMode(memory_dc, TRANSPARENT);
-    SetTextColor(memory_dc, RGB(255, 255, 255));
-
-    HFONT font = CreateFontW(-12, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
-                             CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
-    HGDIOBJ old_font = nullptr;
-    if (font) {
-        old_font = SelectObject(memory_dc, font);
-    }
-
-    DrawTextW(memory_dc, mode_label(), -1, &rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOCLIP);
-
-    if (bits) {
-        auto* pixels = static_cast<unsigned char*>(bits);
-        for (int i = 0; i < kIconSize * kIconSize; ++i) {
-            unsigned char* pixel = pixels + i * 4;
-            const bool text_pixel = pixel[0] != 0 || pixel[1] != 0 || pixel[2] != 0;
-            pixel[3] = text_pixel ? 255 : 0;
-        }
-    }
-
-    if (old_font) {
-        SelectObject(memory_dc, old_font);
-    }
-    if (font) {
-        DeleteObject(font);
-    }
-    SelectObject(memory_dc, old_bitmap);
-
-    ICONINFO icon_info = {};
-    icon_info.fIcon = TRUE;
-    icon_info.hbmColor = color_bitmap;
-    icon_info.hbmMask = mask_bitmap;
-    HICON icon = CreateIconIndirect(&icon_info);
-
-    DeleteObject(color_bitmap);
-    DeleteObject(mask_bitmap);
-    DeleteDC(memory_dc);
-    ReleaseDC(nullptr, screen_dc);
-    return icon;
 }
 
 const wchar_t* InputModeLangBarItem::mode_label() const {
