@@ -25,11 +25,10 @@ TF_DISPLAYATTRIBUTE make_composition_display_attribute() {
     TF_DISPLAYATTRIBUTE attribute = {};
     attribute.crText.type = TF_CT_NONE;
     attribute.crBk.type = TF_CT_NONE;
-    attribute.lsStyle = TF_LS_DOT;
+    attribute.lsStyle = TF_LS_SOLID;
     attribute.fBoldLine = FALSE;
-    attribute.crLine.type = TF_CT_SYSCOLOR;
-    attribute.crLine.nIndex = COLOR_WINDOWTEXT;
-    attribute.bAttr = TF_ATTR_INPUT;
+    attribute.crLine.type = TF_CT_NONE;
+    attribute.bAttr = TF_ATTR_TARGET_NOTCONVERTED;
     return attribute;
 }
 
