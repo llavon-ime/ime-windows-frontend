@@ -25,7 +25,7 @@ TF_DISPLAYATTRIBUTE make_composition_display_attribute() {
     TF_DISPLAYATTRIBUTE attribute = {};
     attribute.crText.type = TF_CT_NONE;
     attribute.crBk.type = TF_CT_NONE;
-    attribute.lsStyle = TF_LS_SOLID;
+    attribute.lsStyle = TF_LS_DOT;
     attribute.fBoldLine = FALSE;
     attribute.crLine.type = TF_CT_NONE;
     attribute.bAttr = TF_ATTR_TARGET_NOTCONVERTED;
@@ -702,26 +702,20 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* pContext, WPARAM wParam, LPARAM 
     }
 
     const bool english_mode = read_backend_input_mode() == InputMode::English;
-    if (english_mode && compositionBuffer.empty()) {
-        if (const auto punctuation = punctuation_shortcut(wParam)) {
-            insert_text(pContext, *punctuation);
-            *pfEaten = TRUE;
-            return S_OK;
-        }
+    if (const auto punctuation = punctuation_shortcut(wParam)) {
+        compositionBuffer.add_chosen_candidate((*punctuation)[0]);
+        set_composition_text(pContext, compositionBuffer.to_string());
+        *pfEaten = TRUE;
+        return S_OK;
+    }
 
+    if (english_mode && compositionBuffer.empty()) {
         if (const auto text = printable_key_text(wParam, lParam)) {
             insert_text(pContext, *text);
             *pfEaten = TRUE;
             return S_OK;
         }
 
-        return S_OK;
-    }
-
-    if (const auto punctuation = punctuation_shortcut(wParam)) {
-        compositionBuffer.add_chosen_candidate((*punctuation)[0]);
-        set_composition_text(pContext, compositionBuffer.to_string());
-        *pfEaten = TRUE;
         return S_OK;
     }
 
