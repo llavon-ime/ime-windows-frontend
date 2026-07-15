@@ -202,7 +202,7 @@ bool shift_key(WPARAM wParam) {
 
 bool modifier_key(WPARAM wParam) {
     return shift_key(wParam) || wParam == VK_CONTROL || wParam == VK_LCONTROL || wParam == VK_RCONTROL ||
-           wParam == VK_MENU || wParam == VK_LMENU || wParam == VK_RMENU;
+           wParam == VK_MENU || wParam == VK_LMENU || wParam == VK_RMENU || wParam == VK_OEM_3;
 }
 
 bool modified_passthrough_key(WPARAM wParam) {
@@ -360,6 +360,37 @@ namespace tsf {
 TextService::TextService() : candidate_ui_(std::make_unique<CandidateUiController>()) {}
 
 TextService::~TextService() = default;
+
+//FIXME: shouldn't be in tsf?
+std::optional<std::u16string> TextService::multifuntional_shortcut(WPARAM wParam) {
+    if (!backtick_used_as_modifier_ || key_down(VK_MENU) || modifier_key(wParam)) {
+        return std::nullopt;
+    }
+    backtick_used_as_modifier_ = false;
+    //TODO: a UI and more keys(and user-defined?)
+    switch (wParam) {
+        case VK_OEM_COMMA:
+            return u"，";
+        case VK_OEM_PERIOD:
+            return u"。";
+        case VK_OEM_1:
+            return u"；";
+        case VK_OEM_2:
+            return u"？";
+        case VK_OEM_3:
+            return u"‵";
+        case VK_OEM_7:
+            return u"、";
+        case VK_OEM_MINUS:
+            return u"—";
+        case VK_OEM_4:
+            return u"「";
+        case VK_OEM_6:
+            return u"」";
+        default:
+            return std::nullopt;
+    }
+}
 
 /**
  * @brief Implements ITfTextInputProcessor::Activate.
@@ -613,11 +644,16 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* /*pContext*/, WPARAM wParam,
 
     const bool english_mode = read_backend_input_mode() == InputMode::English;
     if (english_mode && compositionBuffer.empty()) {
-        *pfEaten = (punctuation_shortcut(wParam) || english_printable_key(wParam)) ? TRUE : FALSE;
+        *pfEaten = (punctuation_shortcut(wParam)  || multifuntional_shortcut(wParam) || english_printable_key(wParam)) ? TRUE : FALSE;
         return S_OK;
     }
 
     if (punctuation_shortcut(wParam)) {
+        *pfEaten = TRUE;
+        return S_OK;
+    }
+
+    if (multifuntional_shortcut(wParam)) {
         *pfEaten = TRUE;
         return S_OK;
     }
@@ -700,9 +736,16 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* pContext, WPARAM wParam, LPARAM 
         shift_toggle_pending_ = false;
         shift_used_as_modifier_ = true;
     }
+    if (key_down(VK_OEM_3) && !backtick_used_as_modifier_) {
+        backtick_used_as_modifier_ = true;
+        *pfEaten = TRUE;
+        return S_OK;
+    }
 
     const bool english_mode = read_backend_input_mode() == InputMode::English;
-    if (const auto punctuation = punctuation_shortcut(wParam)) {
+    auto punctuation = punctuation_shortcut(wParam);
+    if (!punctuation) punctuation = multifuntional_shortcut(wParam);
+    if (punctuation) {
         compositionBuffer.add_chosen_candidate((*punctuation)[0]);
         set_composition_text(pContext, compositionBuffer.to_string());
         *pfEaten = TRUE;
@@ -779,6 +822,9 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* pContext, WPARAM wParam, LPARAM 
     if (wParam == VK_ESCAPE && itfComposition) {
         DebugSink::instance().send(L"CANCEL", compositionBuffer.to_string());
         discard_composition(pContext);
+
+        //used in multifunctional shortcut handling
+        backtick_used_as_modifier_ = false;
         *pfEaten = TRUE;
         return S_OK;
     }
