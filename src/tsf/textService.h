@@ -78,8 +78,10 @@ private:
     InputMode read_backend_input_mode();
     InputMode refresh_input_mode_indicator();
     void sync_input_mode_compartments(InputMode mode);
-    // Multifunctional shortcut handling
-    std::optional<std::u16string> multifuntional_shortcut(WPARAM wParam);
+    void start_backtick_shortcut();
+    std::optional<std::u16string> preview_backtick_shortcut(WPARAM wParam) const;
+    std::optional<std::u16string> consume_backtick_shortcut(WPARAM wParam);
+    void cancel_backtick_shortcut();
 
     winrt::com_ptr<ITfThreadMgr> threadMgr;
     TfClientId _tfClientId = TF_CLIENTID_NULL;
@@ -90,8 +92,7 @@ private:
     CompositionBuffer compositionBuffer;
     bool shift_toggle_pending_ = false;
     bool shift_used_as_modifier_ = false;
-    // Multifunctional shortcut handling
-    bool backtick_used_as_modifier_ = false;
+    bool backtick_shortcut_pending_ = false;
 };
 
 };  // namespace tsf
