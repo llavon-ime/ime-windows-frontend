@@ -6,6 +6,7 @@
 #include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.UI.Text.h>
 #include <winrt/Windows.UI.Xaml.Controls.h>
+#include <winrt/Windows.UI.Xaml.Controls.Primitives.h>
 #include <winrt/Windows.UI.Xaml.Hosting.h>
 #include <winrt/Windows.UI.Xaml.Media.h>
 #include <winrt/Windows.UI.Xaml.h>
@@ -24,6 +25,57 @@ namespace tsf {
 
 class CandidateWindow final : public Window {
 public:
+    ~CandidateWindow() override {
+        uwp_popup_.close();
+    }
+
+    void set_uwp_xaml_popup(bool enabled) {
+        if (use_uwp_xaml_popup_ == enabled) {
+            return;
+        }
+
+        hide();
+        if (enabled) {
+            destroy();
+        } else {
+            uwp_popup_.close();
+        }
+        use_uwp_xaml_popup_ = enabled;
+    }
+
+    void hide() noexcept {
+        if (use_uwp_xaml_popup_) {
+            uwp_popup_.hide();
+            return;
+        }
+        Window::hide();
+    }
+
+    void set_owner_window(HWND owner_window) noexcept {
+        if (owner_window_ == owner_window) {
+            return;
+        }
+
+        owner_window_ = owner_window;
+        if (!created()) {
+            return;
+        }
+
+        SetLastError(ERROR_SUCCESS);
+        const LONG_PTR previous =
+            SetWindowLongPtrW(hwnd(), GWLP_HWNDPARENT, reinterpret_cast<LONG_PTR>(owner_window_));
+        const DWORD error = GetLastError();
+        if (previous == 0 && error != ERROR_SUCCESS) {
+            DebugSink::instance().send(
+                L"UI", L"CandidateWindow::set_owner_window failed err=" + std::to_wstring(error));
+            return;
+        }
+
+        DebugSink::instance().send(
+            L"UI", L"CandidateWindow::set_owner_window owner=" +
+                       std::to_wstring(reinterpret_cast<ULONG_PTR>(owner_window_)));
+    }
+
     void set_layout_columns(std::size_t columns) {
         layout_columns_ = std::clamp<std::size_t>(columns, 1, max_layout_columns);
         if (number_column_ >= layout_columns_) {
@@ -159,8 +211,12 @@ public:
             L"UI", L"CandidateWindow::show_at anchor=(" + std::to_wstring(anchorX) + L"," + std::to_wstring(anchorY) +
                        L"), final=(" + std::to_wstring(x) + L"," + std::to_wstring(y) + L"), size=(" +
                        std::to_wstring(width) + L"," + std::to_wstring(height) + L")");
+        if (use_uwp_xaml_popup_) {
+            show_uwp_popup_at(x, y);
+            return;
+        }
         set_window_pos(HWND_TOPMOST, x, y, width, height, SWP_NOACTIVATE | SWP_SHOWWINDOW);
-        show(SW_SHOWNOACTIVATE);
+        Window::show(SW_SHOWNOACTIVATE);
     }
 
 private:
@@ -218,6 +274,10 @@ protected:
 
 private:
     bool ensure_window() {
+        if (use_uwp_xaml_popup_) {
+            return uwp_popup_.ensure();
+        }
+
         if (created()) {
             DebugSink::instance().send(L"UI", L"CandidateWindow::ensure_window already created");
             return true;
@@ -225,9 +285,9 @@ private:
 
         const auto [width, height] = client_size();
         DebugSink::instance().send(L"UI", L"CandidateWindow::ensure_window creating size=(" + std::to_wstring(width) +
-                                              L"," + std::to_wstring(height) + L")");
+                                               L"," + std::to_wstring(height) + L")");
         if (!create(WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, WS_POPUP, L"拉風輸入法候選字", CW_USEDEFAULT,
-                    CW_USEDEFAULT, width, height)) {
+                    CW_USEDEFAULT, width, height, owner_window_)) {
             DebugSink::instance().send(L"UI", L"CandidateWindow::ensure_window create failed");
             return false;
         }
@@ -307,11 +367,12 @@ private:
     }
 
     void sync_window_dpi() noexcept {
-        if (!created()) {
+        const HWND dpi_window = created() ? hwnd() : owner_window_;
+        if (dpi_window == nullptr) {
             return;
         }
 
-        const UINT dpi = GetDpiForWindow(hwnd());
+        const UINT dpi = GetDpiForWindow(dpi_window);
         if (dpi != 0 && dpi != current_dpi_) {
             DebugSink::instance().send(L"UI", L"CandidateWindow::sync_window_dpi old=" + std::to_wstring(current_dpi_) +
                                                   L", new=" + std::to_wstring(dpi));
@@ -429,6 +490,13 @@ private:
             } catch (...) {
                 DebugSink::instance().send(L"UI", L"CandidateWindow::XamlIslandHost render failed with unknown error");
             }
+        }
+
+        static winrt::Windows::UI::Xaml::UIElement build_content(
+            const std::vector<std::wstring>& candidates, std::size_t selection_index,
+            std::size_t layout_columns, std::size_t number_column, bool can_prev_page, bool can_next_page) {
+            return build_root(
+                candidates, selection_index, layout_columns, number_column, can_prev_page, can_next_page);
         }
 
         void close() noexcept {
@@ -660,6 +728,160 @@ private:
         bool apartment_initialized_ = false;
     };
 
+    class UwpXamlPopupHost {
+    public:
+        bool ensure() {
+            if (popup_) {
+                return true;
+            }
+
+            try {
+                const auto current_window = winrt::Windows::UI::Xaml::Window::Current();
+                if (!current_window || !current_window.Content()) {
+                    DebugSink::instance().send(
+                        L"UI", L"CandidateWindow::UwpXamlPopupHost no Windows.UI.Xaml Window on current thread");
+                    return false;
+                }
+
+                winrt::Windows::UI::Xaml::Controls::Primitives::Popup popup;
+                popup.IsLightDismissEnabled(false);
+                popup.ShouldConstrainToRootBounds(false);
+
+                // Keep Popup.Child stable for the lifetime of the popup. Replacing
+                // Popup.Child while it is open makes XAML internally close and
+                // reopen the popup, which is visible as a transparency flash.
+                winrt::Windows::UI::Xaml::Controls::ContentControl content_host;
+                popup.Child(content_host);
+
+                content_host_ = content_host;
+                popup_ = popup;
+                DebugSink::instance().send(L"UI", L"CandidateWindow::UwpXamlPopupHost created");
+                return true;
+            } catch (const winrt::hresult_error& e) {
+                DebugSink::instance().send(
+                    L"UI", L"CandidateWindow::UwpXamlPopupHost ensure failed hr=" +
+                               std::to_wstring(e.code().value) + L", message=" + std::wstring(e.message().c_str()));
+            } catch (...) {
+                DebugSink::instance().send(
+                    L"UI", L"CandidateWindow::UwpXamlPopupHost ensure failed with unknown error");
+            }
+            content_host_ = nullptr;
+            popup_ = nullptr;
+            return false;
+        }
+
+        bool ready() const noexcept {
+            return popup_ != nullptr && content_host_ != nullptr;
+        }
+
+        void render(const std::vector<std::wstring>& candidates, std::size_t selection_index,
+                    std::size_t layout_columns, std::size_t number_column, bool can_prev_page, bool can_next_page) {
+            if (!ready()) {
+                return;
+            }
+
+            try {
+                content_host_.Content(XamlIslandHost::build_content(
+                    candidates, selection_index, layout_columns, number_column, can_prev_page, can_next_page));
+            } catch (const winrt::hresult_error& e) {
+                DebugSink::instance().send(
+                    L"UI", L"CandidateWindow::UwpXamlPopupHost render failed hr=" +
+                               std::to_wstring(e.code().value) + L", message=" + std::wstring(e.message().c_str()));
+            } catch (...) {
+                DebugSink::instance().send(
+                    L"UI", L"CandidateWindow::UwpXamlPopupHost render failed with unknown error");
+            }
+        }
+
+        void show_at(double horizontal_offset, double vertical_offset) {
+            if (!ready()) {
+                return;
+            }
+
+            try {
+                popup_.HorizontalOffset(horizontal_offset);
+                popup_.VerticalOffset(vertical_offset);
+                popup_.IsOpen(true);
+                DebugSink::instance().send(
+                    L"UI", L"CandidateWindow::UwpXamlPopupHost shown offset=(" +
+                               std::to_wstring(horizontal_offset) + L"," + std::to_wstring(vertical_offset) + L")");
+            } catch (const winrt::hresult_error& e) {
+                DebugSink::instance().send(
+                    L"UI", L"CandidateWindow::UwpXamlPopupHost show failed hr=" +
+                               std::to_wstring(e.code().value) + L", message=" + std::wstring(e.message().c_str()));
+            } catch (...) {
+                DebugSink::instance().send(
+                    L"UI", L"CandidateWindow::UwpXamlPopupHost show failed with unknown error");
+            }
+        }
+
+        void hide() noexcept {
+            try {
+                if (popup_) {
+                    popup_.IsOpen(false);
+                }
+            } catch (...) {
+                DebugSink::instance().send(L"UI", L"CandidateWindow::UwpXamlPopupHost hide ignored exception");
+            }
+        }
+
+        void clear() noexcept {
+            try {
+                if (content_host_) {
+                    content_host_.Content(nullptr);
+                }
+            } catch (...) {
+                DebugSink::instance().send(L"UI", L"CandidateWindow::UwpXamlPopupHost clear ignored exception");
+            }
+        }
+
+        void close() noexcept {
+            hide();
+            clear();
+            if (popup_) {
+                try {
+                    popup_.Child(winrt::Windows::UI::Xaml::UIElement{nullptr});
+                } catch (...) {
+                    DebugSink::instance().send(
+                        L"UI", L"CandidateWindow::UwpXamlPopupHost close ignored child exception");
+                }
+            }
+            content_host_ = nullptr;
+            popup_ = nullptr;
+        }
+
+    private:
+        winrt::Windows::UI::Xaml::Controls::Primitives::Popup popup_{nullptr};
+        winrt::Windows::UI::Xaml::Controls::ContentControl content_host_{nullptr};
+    };
+
+    void show_uwp_popup_at(int screen_x, int screen_y) {
+        HWND coordinate_window = owner_window_;
+        if (coordinate_window != nullptr) {
+            const HWND root_window = GetAncestor(coordinate_window, GA_ROOT);
+            if (root_window != nullptr) {
+                coordinate_window = root_window;
+            }
+        }
+        if (coordinate_window == nullptr) {
+            DebugSink::instance().send(
+                L"UI", L"CandidateWindow::show_uwp_popup_at missing owner window");
+            return;
+        }
+
+        POINT client_point = {screen_x, screen_y};
+        if (!ScreenToClient(coordinate_window, &client_point)) {
+            DebugSink::instance().send(
+                L"UI", L"CandidateWindow::show_uwp_popup_at ScreenToClient failed err=" +
+                           std::to_wstring(GetLastError()));
+            return;
+        }
+
+        const double dip_scale = static_cast<double>(default_dpi) / static_cast<double>(current_dpi_);
+        uwp_popup_.show_at(
+            static_cast<double>(client_point.x) * dip_scale, static_cast<double>(client_point.y) * dip_scale);
+    }
+
     void ensure_xaml_island() {
         if (!created()) {
             return;
@@ -690,16 +912,31 @@ private:
     }
 
     void render_surface() {
-        if (candidates_.empty() || !xaml_island_.ready()) {
+        if (candidates_.empty()) {
             return;
         }
 
+        if (use_uwp_xaml_popup_) {
+            if (uwp_popup_.ready()) {
+                uwp_popup_.render(
+                    candidates_, selection_index_, layout_columns_, number_column_, can_prev_page_, can_next_page_);
+            }
+            return;
+        }
+
+        if (!xaml_island_.ready()) {
+            return;
+        }
         xaml_island_.render(
             candidates_, selection_index_, layout_columns_, number_column_, can_prev_page_, can_next_page_);
     }
 
     void clear_surface() {
-        xaml_island_.clear();
+        if (use_uwp_xaml_popup_) {
+            uwp_popup_.clear();
+        } else {
+            xaml_island_.clear();
+        }
     }
 
     void paint() {
@@ -721,8 +958,11 @@ private:
     std::size_t number_column_ = 0;
     bool can_prev_page_ = false;
     bool can_next_page_ = false;
+    bool use_uwp_xaml_popup_ = false;
     UINT current_dpi_ = default_dpi;
+    HWND owner_window_ = nullptr;
     XamlIslandHost xaml_island_;
+    UwpXamlPopupHost uwp_popup_;
 };
 
 }  // namespace tsf

@@ -181,6 +181,14 @@ public:
     }
 
 public:
+    void set_uwp_xaml_popup(bool enabled) {
+        candidate_window.set_uwp_xaml_popup(enabled);
+    }
+
+    void set_owner_window(HWND owner_window) {
+        candidate_window.set_owner_window(owner_window);
+    }
+
     void set_anchor_point(const POINT& pt) {
         anchor_point = pt;
         has_anchor_point = true;
