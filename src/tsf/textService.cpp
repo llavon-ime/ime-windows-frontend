@@ -344,6 +344,9 @@ std::optional<std::u16string> punctuation_shortcut(WPARAM wParam) {
     // Follow the common Traditional Chinese IME punctuation layout used by
     // Microsoft Bopomofo/Chewing-like tables: Ctrl selects punctuation for
     // keys that are otherwise occupied by Bopomofo symbols.
+    // Leave Ctrl+/ available to applications (for example, toggling
+    // comments), while Ctrl+Shift+/ keeps the Microsoft Bopomofo Ctrl+?
+    // shortcut for a full-width question mark.
     if (key_down(VK_SHIFT)) {
         switch (wParam) {
             case VK_OEM_COMMA:
@@ -380,8 +383,6 @@ std::optional<std::u16string> punctuation_shortcut(WPARAM wParam) {
             return u"；";
         case VK_OEM_7:
             return u"、";
-        case VK_OEM_2:
-            return u"？";
         case VK_OEM_MINUS:
             return u"—";
         case VK_OEM_4:
