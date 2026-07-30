@@ -19,6 +19,7 @@
 #include <utility>
 #include <vector>
 
+#include "ui/xamlCompatibility.hpp"
 #include "ui/window.hpp"
 
 namespace tsf {
@@ -418,19 +419,23 @@ private:
             apartment_initialized_ = SUCCEEDED(apartment_hr);
 
             try {
-                if (!xaml_manager_) {
-                    xaml_manager_ = winrt::Windows::UI::Xaml::Hosting::WindowsXamlManager::InitializeForCurrentThread();
-                }
-                if (!xaml_source_) {
-                    xaml_source_ = winrt::Windows::UI::Xaml::Hosting::DesktopWindowXamlSource();
-                }
+                {
+                    ScopedXamlMaxVersionTestedWorkaround compatibility_workaround;
+                    if (!xaml_manager_) {
+                        xaml_manager_ =
+                            winrt::Windows::UI::Xaml::Hosting::WindowsXamlManager::InitializeForCurrentThread();
+                    }
+                    if (!xaml_source_) {
+                        xaml_source_ = winrt::Windows::UI::Xaml::Hosting::DesktopWindowXamlSource();
+                    }
 
-                const auto interop = xaml_source_.as<::IDesktopWindowXamlSourceNative>();
-                winrt::check_hresult(interop->AttachToWindow(parent));
+                    const auto interop = xaml_source_.as<::IDesktopWindowXamlSourceNative>();
+                    winrt::check_hresult(interop->AttachToWindow(parent));
 
-                HWND island_hwnd = nullptr;
-                winrt::check_hresult(interop->get_WindowHandle(&island_hwnd));
-                island_hwnd_ = island_hwnd;
+                    HWND island_hwnd = nullptr;
+                    winrt::check_hresult(interop->get_WindowHandle(&island_hwnd));
+                    island_hwnd_ = island_hwnd;
+                }
 
                 DebugSink::instance().send(L"UI", L"CandidateWindow::XamlIslandHost attached hwnd=" +
                                                       std::to_wstring(reinterpret_cast<ULONG_PTR>(island_hwnd_)));
