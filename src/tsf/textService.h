@@ -78,6 +78,10 @@ private:
     InputMode read_backend_input_mode();
     InputMode refresh_input_mode_indicator();
     void sync_input_mode_compartments(InputMode mode);
+    bool context_accepts_input(ITfContext* context) const;
+    bool composition_belongs_to(ITfContext* context) const;
+    bool has_composition_state() const;
+    void clear_composition_state();
     // Multifunctional shortcut handling
     std::optional<std::u16string> multifuntional_shortcut(WPARAM wParam);
 
@@ -85,6 +89,7 @@ private:
     TfClientId _tfClientId = TF_CLIENTID_NULL;
     DWORD dwThreadMgrEventSinkCookie = TF_INVALID_COOKIE;
     winrt::com_ptr<ITfComposition> itfComposition;
+    winrt::com_ptr<ITfContext> composition_context_;
     std::unique_ptr<CandidateUiController> candidate_ui_;
     winrt::com_ptr<InputModeLangBarItem> input_mode_lang_bar_item_;
     CompositionBuffer compositionBuffer;
