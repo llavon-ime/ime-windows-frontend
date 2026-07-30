@@ -719,6 +719,7 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* pContext, WPARAM wParam, LPA
 
     const bool english_mode = read_backend_input_mode() == InputMode::English;
     const bool active_composition = composition_belongs_to(pContext) && !compositionBuffer.empty();
+    const bool is_bopomofo_key = Bopomofo::lookup(static_cast<int>(wParam)) != std::nullopt;
     if (english_mode && !active_composition) {
         *pfEaten = (punctuation_shortcut(wParam)  || multifuntional_shortcut(wParam) || english_printable_key(wParam)) ? TRUE : FALSE;
         return S_OK;
@@ -735,6 +736,11 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* pContext, WPARAM wParam, LPA
     }
 
     if (shifted_printable_symbol_text(wParam, lParam)) {
+        *pfEaten = TRUE;
+        return S_OK;
+    }
+
+    if (active_composition && !is_bopomofo_key && printable_key_text(wParam, lParam)) {
         *pfEaten = TRUE;
         return S_OK;
     }
@@ -767,7 +773,6 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* pContext, WPARAM wParam, LPA
         }
     }
 
-    const bool is_bopomofo_key = Bopomofo::lookup(static_cast<int>(wParam)) != std::nullopt;
     const bool starts_composition = is_bopomofo_key && wParam != VK_SPACE;
     *pfEaten = starts_composition ? TRUE : FALSE;
     return S_OK;
@@ -853,7 +858,12 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* pContext, WPARAM wParam, LPARAM 
         return S_OK;
     }
 
-    if (const auto symbol = shifted_printable_symbol_text(wParam, lParam)) {
+    auto symbol = shifted_printable_symbol_text(wParam, lParam);
+    if (!symbol && !compositionBuffer.empty() &&
+        Bopomofo::lookup(static_cast<int>(wParam)) == std::nullopt) {
+        symbol = printable_key_text(wParam, lParam);
+    }
+    if (symbol) {
         if (compositionBuffer.empty()) {
             insert_text(pContext, *symbol);
             *pfEaten = TRUE;
