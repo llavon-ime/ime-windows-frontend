@@ -20,18 +20,9 @@ bool is_current_process_app_container() noexcept {
     return result != FALSE && is_app_container != 0;
 }
 
-bool use_uwp_xaml_popup(ITfThreadMgr* thread_mgr) noexcept {
-    DWORD active_flags = 0;
-    winrt::com_ptr<ITfThreadMgrEx> thread_mgr_ex;
-    if (thread_mgr != nullptr &&
-        SUCCEEDED(thread_mgr->QueryInterface<ITfThreadMgrEx>(thread_mgr_ex.put())) &&
-        SUCCEEDED(thread_mgr_ex->GetActiveFlags(&active_flags)) &&
-        (active_flags & TF_TMF_IMMERSIVEMODE) != 0) {
-        return true;
-    }
-
-    // The token check is a safety guard: never try DesktopWindowXamlSource from
-    // an AppContainer even if an older TSF host omitted IMMERSIVEMODE.
+bool use_uwp_xaml_popup() noexcept {
+    // Keep desktop processes on DesktopWindowXamlSource even when the host
+    // already contains XAML Islands. Only an AppContainer uses the in-app popup.
     return is_current_process_app_container();
 }
 
@@ -40,7 +31,7 @@ bool use_uwp_xaml_popup(ITfThreadMgr* thread_mgr) noexcept {
 void CandidateUiController::attach(ITfThreadMgr* thread_mgr, TfClientId client_id) {
     thread_mgr_.copy_from(thread_mgr);
     client_id_ = client_id;
-    const bool use_uwp_popup = use_uwp_xaml_popup(thread_mgr);
+    const bool use_uwp_popup = use_uwp_xaml_popup();
     element_->set_uwp_xaml_popup(use_uwp_popup);
     DebugSink::instance().send(
         L"INFO", L"CandidateUiController::attach backend=" +
