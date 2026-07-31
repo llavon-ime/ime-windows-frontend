@@ -192,6 +192,10 @@ public:
         has_anchor_point = false;
     }
 
+    void set_owner_window(HWND window) noexcept {
+        owner_window = window;
+    }
+
     void disconnect() noexcept {
         candidate_ui_client_.disconnect();
     }
@@ -363,6 +367,7 @@ private:
     bool expanded = false;
     bool has_anchor_point = false;
     POINT anchor_point = {};
+    HWND owner_window = nullptr;
     std::function<void(std::wstring)> finalize_callback;
     CandidateUiClient candidate_ui_client_;
 
@@ -436,6 +441,7 @@ private:
         }
 
         CandidateUiPresentation presentation;
+        presentation.owner_window = static_cast<uint64_t>(reinterpret_cast<ULONG_PTR>(owner_window));
         presentation.anchor_x = presentation_anchor.x;
         presentation.anchor_y = presentation_anchor.y;
         presentation.candidates = std::move(page_items);

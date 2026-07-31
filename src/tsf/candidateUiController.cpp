@@ -52,6 +52,10 @@ void CandidateUiController::show(ITfContext* context, const std::vector<std::wst
         return;
     }
 
+    HWND owner_window = nullptr;
+    query_owner_window(context, &owner_window);
+    element_->set_owner_window(owner_window);
+
     POINT anchor = {};
     if (query_anchor(context, &anchor)) {
         element_->set_anchor_point(anchor);
@@ -104,6 +108,32 @@ winrt::com_ptr<ITfUIElementMgr> CandidateUiController::get_ui_element_mgr() cons
         return nullptr;
     }
     return ui_element_mgr;
+}
+
+bool CandidateUiController::query_owner_window(ITfContext* context, HWND* owner_window) const {
+    if (!context || !owner_window) {
+        return false;
+    }
+
+    *owner_window = nullptr;
+
+    winrt::com_ptr<ITfContextView> context_view;
+    const HRESULT hr_view = context->GetActiveView(context_view.put());
+    if (SUCCEEDED(hr_view) && context_view) {
+        HWND context_window = nullptr;
+        if (SUCCEEDED(context_view->GetWnd(&context_window)) && context_window != nullptr) {
+            *owner_window = context_window;
+            return true;
+        }
+    }
+
+    HWND focus_window = GetFocus();
+    if (focus_window == nullptr) {
+        return false;
+    }
+
+    *owner_window = focus_window;
+    return true;
 }
 
 bool CandidateUiController::query_anchor(ITfContext* context, POINT* anchor) const {

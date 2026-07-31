@@ -89,7 +89,8 @@ bool CandidateUiClient::present(const CandidateUiPresentation& presentation) {
 
     const uint8_t can_prev_page = presentation.can_prev_page ? 1 : 0;
     const uint8_t can_next_page = presentation.can_next_page ? 1 : 0;
-    if (!write_command(Command::Present) || !write_value(presentation.anchor_x) ||
+    if (!write_command(Command::Present) || !write_value(presentation.owner_window) ||
+        !write_value(presentation.anchor_x) ||
         !write_value(presentation.anchor_y) || !write_value(candidate_count) ||
         !write_value(presentation.selection_index) ||
         !write_value(presentation.layout_columns) ||
