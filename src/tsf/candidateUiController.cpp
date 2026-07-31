@@ -4,42 +4,16 @@
 #include "utils/debugSink.hpp"
 
 namespace tsf {
-namespace {
-
-bool is_current_process_app_container() noexcept {
-    HANDLE token = nullptr;
-    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) {
-        return false;
-    }
-
-    DWORD is_app_container = 0;
-    DWORD returned_size = 0;
-    const BOOL result = GetTokenInformation(
-        token, TokenIsAppContainer, &is_app_container, sizeof(is_app_container), &returned_size);
-    CloseHandle(token);
-    return result != FALSE && is_app_container != 0;
-}
-
-bool use_uwp_xaml_popup() noexcept {
-    // Keep desktop processes on DesktopWindowXamlSource even when the host
-    // already contains XAML Islands. Only an AppContainer uses the in-app popup.
-    return is_current_process_app_container();
-}
-
-}  // namespace
 
 void CandidateUiController::attach(ITfThreadMgr* thread_mgr, TfClientId client_id) {
     thread_mgr_.copy_from(thread_mgr);
     client_id_ = client_id;
-    const bool use_uwp_popup = use_uwp_xaml_popup();
-    element_->set_uwp_xaml_popup(use_uwp_popup);
-    DebugSink::instance().send(
-        L"INFO", L"CandidateUiController::attach backend=" +
-                     std::wstring(use_uwp_popup ? L"UWP XAML Popup" : L"Desktop XAML Island"));
+    DebugSink::instance().send(L"INFO", L"CandidateUiController::attach backend=service pipe");
 }
 
 void CandidateUiController::detach() {
     hide();
+    element_->disconnect();
     thread_mgr_ = nullptr;
     client_id_ = TF_CLIENTID_NULL;
 }
@@ -77,10 +51,6 @@ void CandidateUiController::show(ITfContext* context, const std::vector<std::wst
     if (!ui_element_mgr) {
         return;
     }
-
-    HWND owner_window = nullptr;
-    query_owner_window(context, &owner_window);
-    element_->set_owner_window(owner_window);
 
     POINT anchor = {};
     if (query_anchor(context, &anchor)) {
@@ -134,32 +104,6 @@ winrt::com_ptr<ITfUIElementMgr> CandidateUiController::get_ui_element_mgr() cons
         return nullptr;
     }
     return ui_element_mgr;
-}
-
-bool CandidateUiController::query_owner_window(ITfContext* context, HWND* owner_window) const {
-    if (!context || !owner_window) {
-        return false;
-    }
-
-    *owner_window = nullptr;
-
-    winrt::com_ptr<ITfContextView> context_view;
-    const HRESULT hr_view = context->GetActiveView(context_view.put());
-    if (SUCCEEDED(hr_view) && context_view) {
-        HWND context_window = nullptr;
-        if (SUCCEEDED(context_view->GetWnd(&context_window)) && context_window != nullptr) {
-            *owner_window = context_window;
-            return true;
-        }
-    }
-
-    HWND focus_window = GetFocus();
-    if (focus_window == nullptr) {
-        return false;
-    }
-
-    *owner_window = focus_window;
-    return true;
 }
 
 bool CandidateUiController::query_anchor(ITfContext* context, POINT* anchor) const {
