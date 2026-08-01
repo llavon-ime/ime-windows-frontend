@@ -56,11 +56,11 @@ void CandidateUiController::show(ITfContext* context, const std::vector<std::wst
     query_owner_window(context, &owner_window);
     element_->set_owner_window(owner_window);
 
-    POINT anchor = {};
-    if (query_anchor(context, &anchor)) {
-        element_->set_anchor_point(anchor);
+    RECT anchor_rect = {};
+    if (query_anchor_rect(context, &anchor_rect)) {
+        element_->set_anchor_rect(anchor_rect);
     } else {
-        element_->clear_anchor_point();
+        element_->clear_anchor_rect();
     }
 
     element_->update(candidates, [this, callback = std::move(on_finalize)](std::wstring word) mutable {
@@ -136,8 +136,8 @@ bool CandidateUiController::query_owner_window(ITfContext* context, HWND* owner_
     return true;
 }
 
-bool CandidateUiController::query_anchor(ITfContext* context, POINT* anchor) const {
-    if (!context || !anchor || client_id_ == TF_CLIENTID_NULL) {
+bool CandidateUiController::query_anchor_rect(ITfContext* context, RECT* anchor_rect) const {
+    if (!context || !anchor_rect || client_id_ == TF_CLIENTID_NULL) {
         return false;
     }
 
@@ -147,10 +147,10 @@ bool CandidateUiController::query_anchor(ITfContext* context, POINT* anchor) con
         return false;
     }
 
-    POINT point = {};
+    RECT text_rect = {};
     bool found = false;
     winrt::com_ptr<EditSession> edit_session = winrt::make_self<EditSession>();
-    edit_session->set_operation([context, context_view, &point, &found](TfEditCookie ec) {
+    edit_session->set_operation([context, context_view, &text_rect, &found](TfEditCookie ec) {
         TF_SELECTION selection = {};
         ULONG fetched = 0;
         const HRESULT hr_selection = context->GetSelection(ec, TF_DEFAULT_SELECTION, 1, &selection, &fetched);
@@ -168,8 +168,7 @@ bool CandidateUiController::query_anchor(ITfContext* context, POINT* anchor) con
             return;
         }
 
-        point.x = rc.left;
-        point.y = rc.bottom;
+        text_rect = rc;
         found = true;
     });
 
@@ -179,7 +178,7 @@ bool CandidateUiController::query_anchor(ITfContext* context, POINT* anchor) con
         return false;
     }
 
-    *anchor = point;
+    *anchor_rect = text_rect;
     return true;
 }
 
@@ -189,7 +188,7 @@ void CandidateUiController::dismiss_ui_element() {
     }
 
     element_->Show(FALSE);
-    element_->clear_anchor_point();
+    element_->clear_anchor_rect();
 
     if (ui_element_id_ == TF_INVALID_COOKIE) {
         return;

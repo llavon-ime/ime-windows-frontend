@@ -181,15 +181,17 @@ public:
     }
 
 public:
-    void set_anchor_point(const POINT& pt) {
-        anchor_point = pt;
-        has_anchor_point = true;
-        DebugSink::instance().send(L"INFO", L"CandidateListUIElement::set_anchor_point (" + std::to_wstring(pt.x) +
-                                                L"," + std::to_wstring(pt.y) + L")");
+    void set_anchor_rect(const RECT& rect) {
+        anchor_rect = rect;
+        has_anchor_rect = true;
+        DebugSink::instance().send(
+            L"INFO", L"CandidateListUIElement::set_anchor_rect [" + std::to_wstring(rect.left) + L"," +
+                         std::to_wstring(rect.top) + L"," + std::to_wstring(rect.right) + L"," +
+                         std::to_wstring(rect.bottom) + L"]");
     }
 
-    void clear_anchor_point() {
-        has_anchor_point = false;
+    void clear_anchor_rect() {
+        has_anchor_rect = false;
     }
 
     void set_owner_window(HWND window) noexcept {
@@ -365,8 +367,8 @@ private:
     UINT current_page = 0;
     bool shown_ = false;
     bool expanded = false;
-    bool has_anchor_point = false;
-    POINT anchor_point = {};
+    bool has_anchor_rect = false;
+    RECT anchor_rect = {};
     HWND owner_window = nullptr;
     std::function<void(std::wstring)> finalize_callback;
     CandidateUiClient candidate_ui_client_;
@@ -435,15 +437,20 @@ private:
             return;
         }
 
-        POINT presentation_anchor = anchor_point;
-        if (!has_anchor_point && GetCursorPos(&presentation_anchor) == FALSE) {
-            return;
+        RECT presentation_anchor = anchor_rect;
+        if (!has_anchor_rect) {
+            POINT cursor = {};
+            if (GetCursorPos(&cursor) == FALSE) {
+                return;
+            }
+            presentation_anchor = RECT{cursor.x, cursor.y, cursor.x, cursor.y};
         }
 
         CandidateUiPresentation presentation;
         presentation.owner_window = static_cast<uint64_t>(reinterpret_cast<ULONG_PTR>(owner_window));
-        presentation.anchor_x = presentation_anchor.x;
-        presentation.anchor_y = presentation_anchor.y;
+        presentation.anchor_x = presentation_anchor.left;
+        presentation.anchor_y = presentation_anchor.bottom;
+        presentation.anchor_top = presentation_anchor.top;
         presentation.candidates = std::move(page_items);
         presentation.selection_index = local_selection;
         presentation.layout_columns = visible_pages;

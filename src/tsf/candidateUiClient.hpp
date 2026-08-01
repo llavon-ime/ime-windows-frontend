@@ -12,6 +12,7 @@ struct CandidateUiPresentation final {
     uint64_t owner_window = 0;
     int32_t anchor_x = 0;
     int32_t anchor_y = 0;
+    int32_t anchor_top = 0;
     std::vector<std::wstring> candidates;
     uint32_t selection_index = 0;
     uint32_t layout_columns = 1;
@@ -51,7 +52,7 @@ private:
 
     static constexpr const wchar_t* pipe_name = L"\\\\.\\pipe\\llavon-ime-candidate-ui";
     static constexpr const wchar_t* launch_mutex_name = L"Local\\LlavonImeBackendStart";
-    static constexpr uint16_t protocol_version = 2;
+    static constexpr uint16_t protocol_version = 3;
     static constexpr uint32_t maximum_candidate_count = 36;
     static constexpr uint32_t maximum_candidate_length = 256;
     static constexpr uint32_t maximum_layout_columns = 4;
