@@ -202,7 +202,11 @@ bool shift_key(WPARAM wParam) {
 
 bool modifier_key(WPARAM wParam) {
     return shift_key(wParam) || wParam == VK_CONTROL || wParam == VK_LCONTROL || wParam == VK_RCONTROL ||
-           wParam == VK_MENU || wParam == VK_LMENU || wParam == VK_RMENU || wParam == VK_OEM_3;
+           wParam == VK_MENU || wParam == VK_LMENU || wParam == VK_RMENU;
+}
+
+bool backtick_shortcut_key(WPARAM wParam) {
+    return wParam == VK_OEM_3 && !key_down(VK_SHIFT) && !key_down(VK_CONTROL) && !key_down(VK_MENU);
 }
 
 bool modified_passthrough_key(WPARAM wParam) {
@@ -717,11 +721,18 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* pContext, WPARAM wParam, LPA
         shift_used_as_modifier_ = true;
     }
 
+    if (backtick_shortcut_key(wParam)) {
+        *pfEaten = TRUE;
+        return S_OK;
+    }
+
     const bool english_mode = read_backend_input_mode() == InputMode::English;
     const bool active_composition = composition_belongs_to(pContext) && !compositionBuffer.empty();
     const bool is_bopomofo_key = Bopomofo::lookup(static_cast<int>(wParam)) != std::nullopt;
     if (english_mode && !active_composition) {
-        *pfEaten = (punctuation_shortcut(wParam)  || multifuntional_shortcut(wParam) || english_printable_key(wParam)) ? TRUE : FALSE;
+        *pfEaten = (punctuation_shortcut(wParam) || multifuntional_shortcut(wParam) || english_printable_key(wParam))
+                       ? TRUE
+                       : FALSE;
         return S_OK;
     }
 
@@ -832,7 +843,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* pContext, WPARAM wParam, LPARAM 
         shift_toggle_pending_ = false;
         shift_used_as_modifier_ = true;
     }
-    if (key_down(VK_OEM_3) && !backtick_used_as_modifier_) {
+    if (backtick_shortcut_key(wParam) && !backtick_used_as_modifier_) {
         backtick_used_as_modifier_ = true;
         *pfEaten = TRUE;
         return S_OK;
@@ -901,6 +912,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* pContext, WPARAM wParam, LPARAM 
                 *pfEaten = TRUE;
                 return S_OK;
             case CandidateKeyResult::finalized:
+                compositionBuffer.next();
                 refresh_composition_after_candidate_finalize(pContext);
                 *pfEaten = TRUE;
                 return S_OK;
