@@ -27,3 +27,16 @@ The DLL keeps TSF composition, candidate state, keyboard behavior, and
 `\\.\pipe\llavon-ime`; render-ready candidate snapshots use the independent
 `\\.\pipe\llavon-ime-candidate-ui`. The candidate HWND and XAML island are
 owned by `llavon-ime-candidate-ui.dll` in the service process.
+
+`TextService` directly owns a `llavon::debug::Logger` from the shared asynchronous
+`llavon::debug-client` library. Every TSF host process connects as an independent
+producer to `\\.\pipe\llavon-ime-debugger`. Frontend timing starts at
+`OnTestKeyDown` when the host supplies the matching test callback, otherwise at
+`OnKeyDown`. Each record identifies that boundary with `start`. It is emitted
+as `frontend_e2e_ms` only when
+`ITfTextEditSink::OnEndEdit` confirms completion of the prediction-triggered
+read/write edit session. The same record partitions that interval into input
+mode, ready, pre-context, prediction round-trip, edit-session wait/application,
+and edit notification stages. `edit_apply_ms` is further split across edit
+preparation, `SetText`, display attributes, and selection; `partition_error_ms`
+must remain approximately zero.

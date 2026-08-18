@@ -35,6 +35,7 @@ target_compile_options(llavon-ime PRIVATE
 
 find_package(cppwinrt CONFIG REQUIRED)
 find_package(jsoncons CONFIG REQUIRED)
+find_package(llavon-debug-client CONFIG REQUIRED)
 find_package(utf8cpp CONFIG REQUIRED)
 
 target_link_libraries(llavon-ime PRIVATE
@@ -44,9 +45,8 @@ target_link_libraries(llavon-ime PRIVATE
     ole32       # COM
     oleaut32    # COM Automation
     uuid        # TSF GUID constants
-    ws2_32      # Winsock2 (DebugSink)
-
     jsoncons
+    llavon::debug-client
     utf8::cpp
     utf8cpp::utf8cpp
 )

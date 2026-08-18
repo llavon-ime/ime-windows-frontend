@@ -2,7 +2,10 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
+#include <cstdint>
 #include <cwctype>
+#include <format>
 #include <optional>
 
 #include "candidateUiController.hpp"
@@ -11,7 +14,6 @@
 #include "engine/engine.hpp"
 #include "inputModeLangBarItem.hpp"
 #include "system/globals.h"
-#include "utils/debugSink.hpp"
 #include "utils/healper.hpp"
 
 using namespace std::literals;
@@ -404,7 +406,13 @@ namespace tsf {
 
 TextService::TextService() : candidate_ui_(std::make_unique<CandidateUiController>()) {}
 
-TextService::~TextService() = default;
+TextService::~TextService() {
+    unadvise_text_edit_sink();
+}
+
+HRESULT TextService::handle_com_exception(std::source_location location) noexcept {
+    return tsf::handle_com_exception(logger_, location);
+}
 
 //FIXME: shouldn't be in tsf?
 std::optional<std::u16string> TextService::multifuntional_shortcut(WPARAM wParam) {
@@ -485,8 +493,7 @@ HRESULT TextService::activate(ITfThreadMgr* pThreadMgr, TfClientId tfClientId) {
 
     input_mode_lang_bar_item_ = winrt::make_self<InputModeLangBarItem>([this]() {
         get_engine()->toggle_input_mode();
-        const InputMode mode = refresh_input_mode_indicator();
-        DebugSink::instance().send(L"MODE", mode == InputMode::Chinese ? L"Chinese" : L"English");
+        refresh_input_mode_indicator();
     });
     input_mode_lang_bar_item_->add_to_language_bar(threadMgr.get());
     refresh_input_mode_indicator();
@@ -518,9 +525,6 @@ HRESULT TextService::activate(ITfThreadMgr* pThreadMgr, TfClientId tfClientId) {
         return hr;
     }
 
-    DebugSink::instance().connect();
-    DebugSink::instance().send(L"IME", L"Activated");
-
     return S_OK;
 }
 
@@ -530,9 +534,8 @@ HRESULT TextService::activate(ITfThreadMgr* pThreadMgr, TfClientId tfClientId) {
  * Releases TSF sinks, clears composition state, and stops debug logging.
  */
 void TextService::deactivate() {
-    DebugSink::instance().send(L"IME", L"Deactivated");
+    unadvise_text_edit_sink();
     candidate_ui_->hide();
-    DebugSink::instance().disconnect();
 
     if (itfComposition) {
         itfComposition->EndComposition(TF_INVALID_COOKIE);
@@ -704,7 +707,8 @@ STDMETHODIMP TextService::OnSetFocus(BOOL fForeground) try {
  */
 STDMETHODIMP TextService::OnTestKeyDown(ITfContext* pContext, WPARAM wParam, LPARAM lParam, BOOL* pfEaten) try {
     if (!pfEaten) return E_INVALIDARG;
-    DebugSink::instance().send(L"EVENT", L"OnTestKeyDown key=" + std::to_wstring(wParam));
+    key_down_started_at_ = std::chrono::steady_clock::now();
+    key_down_started_key_ = wParam;
 
     if (!context_accepts_input(pContext)) {
         *pfEaten = FALSE;
@@ -769,8 +773,6 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* pContext, WPARAM wParam, LPA
     if (active_composition && candidate_ui_->is_active()) {
         const bool backspace_composition = (wParam == VK_BACK);
         *pfEaten = (candidate_ui_->can_handle_key(wParam) || backspace_composition) ? TRUE : FALSE;
-        DebugSink::instance().send(
-            L"EVENT", L"OnTestKeyDown candidate mode, eaten="s + (*pfEaten ? L"TRUE" : L"FALSE"));
         return S_OK;
     }
 
@@ -812,7 +814,16 @@ STDMETHODIMP TextService::OnTestKeyUp(ITfContext* /*pContext*/, WPARAM wParam, L
 STDMETHODIMP TextService::OnKeyDown(ITfContext* pContext, WPARAM wParam, LPARAM lParam, BOOL* pfEaten) try {
     if (!pfEaten) return E_INVALIDARG;
     *pfEaten = FALSE;
-    DebugSink::instance().send(L"EVENT", L"OnKeyDown");
+    const bool started_at_on_test = key_down_started_at_ && key_down_started_key_ == wParam;
+    const auto e2e_start =
+        started_at_on_test ? *key_down_started_at_ : std::chrono::steady_clock::now();
+    key_down_started_at_.reset();
+    E2eTrace e2e_trace{};
+    e2e_trace.start = e2e_start;
+    e2e_trace.on_key_started = std::chrono::steady_clock::now();
+    e2e_trace.key = static_cast<std::uint64_t>(wParam);
+    e2e_trace.sequence = next_e2e_sequence_++;
+    e2e_trace.started_at_on_test = started_at_on_test;
 
     if (!context_accepts_input(pContext)) {
         return S_OK;
@@ -849,7 +860,11 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* pContext, WPARAM wParam, LPARAM 
         return S_OK;
     }
 
+    e2e_trace.mode_started = std::chrono::steady_clock::now();
     const bool english_mode = read_backend_input_mode() == InputMode::English;
+    e2e_trace.mode_finished = std::chrono::steady_clock::now();
+    e2e_trace.ready_started = e2e_trace.mode_finished;
+    e2e_trace.ready_finished = e2e_trace.mode_finished;
     auto punctuation = punctuation_shortcut(wParam);
     if (!punctuation) punctuation = multifuntional_shortcut(wParam);
     if (punctuation) {
@@ -913,7 +928,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* pContext, WPARAM wParam, LPARAM 
                 return S_OK;
             case CandidateKeyResult::finalized:
                 compositionBuffer.next();
-                refresh_composition_after_candidate_finalize(pContext);
+                refresh_composition_after_candidate_finalize(pContext, e2e_trace);
                 *pfEaten = TRUE;
                 return S_OK;
             case CandidateKeyResult::aborted:
@@ -926,14 +941,12 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* pContext, WPARAM wParam, LPARAM 
     }
 
     if (wParam == VK_RETURN && !compositionBuffer.empty()) {
-        DebugSink::instance().send(L"COMMIT", compositionBuffer.to_string());
         end_composition(pContext);
         *pfEaten = TRUE;
         return S_OK;
     }
 
     if (wParam == VK_ESCAPE && itfComposition) {
-        DebugSink::instance().send(L"CANCEL", compositionBuffer.to_string());
         discard_composition(pContext);
 
         //used in multifunctional shortcut handling
@@ -995,7 +1008,9 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* pContext, WPARAM wParam, LPARAM 
     }
 
     if (wParam != VK_SPACE) {
+        e2e_trace.ready_started = std::chrono::steady_clock::now();
         get_engine()->ready();
+        e2e_trace.ready_finished = std::chrono::steady_clock::now();
     }
 
     // if (!itfComposition) {
@@ -1003,14 +1018,21 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* pContext, WPARAM wParam, LPARAM 
     // }
     compositionBuffer.add(cur_char.value());
     const auto invalid_span = compositionBuffer.current_invalid_span();
+    bool prediction_performed = false;
     if (!invalid_span) {
-        compositionBuffer.predict_paddings(get_pre_composit_context(pContext));
+        e2e_trace.pre_context_started = std::chrono::steady_clock::now();
+        auto pre_context = get_pre_composit_context(pContext);
+        e2e_trace.pre_context_finished = std::chrono::steady_clock::now();
+        e2e_trace.predict_started = std::chrono::steady_clock::now();
+        prediction_performed = compositionBuffer.predict_paddings(std::move(pre_context));
+        e2e_trace.predict_finished = std::chrono::steady_clock::now();
     }
-    DebugSink::instance().send(L"KEY", compositionBuffer.to_string());
     if (invalid_span) {
         set_composition_text(pContext, compositionBuffer.to_string(), invalid_span->first, invalid_span->second);
     } else {
-        set_composition_text(pContext, compositionBuffer.to_string());
+        set_composition_text(pContext, compositionBuffer.to_string(), std::u16string::npos, 0,
+                             prediction_performed ? std::optional<E2eTrace>(e2e_trace)
+                                                  : std::nullopt);
     }
     *pfEaten = TRUE;
     return S_OK;
@@ -1028,8 +1050,7 @@ STDMETHODIMP TextService::OnKeyUp(ITfContext* /*pContext*/, WPARAM wParam, LPARA
     if (shift_key(wParam) && shift_toggle_pending_) {
         if (!shift_used_as_modifier_) {
             get_engine()->toggle_input_mode();
-            const InputMode mode = refresh_input_mode_indicator();
-            DebugSink::instance().send(L"MODE", mode == InputMode::Chinese ? L"Chinese" : L"English");
+            refresh_input_mode_indicator();
         }
 
         shift_toggle_pending_ = false;
@@ -1067,6 +1088,83 @@ STDMETHODIMP TextService::OnCompositionTerminated(TfEditCookie /*ecWrite*/, ITfC
         return S_OK;
     }
     clear_composition_state();
+    return S_OK;
+} catch (...) {
+    return handle_com_exception();
+}
+
+STDMETHODIMP TextService::OnEndEdit(ITfContext* context, TfEditCookie /*read_only_cookie*/,
+                                    ITfEditRecord* /*edit_record*/) try {
+    if (!pending_e2e_trace_ || !text_edit_sink_context_ ||
+        !same_com_object(text_edit_sink_context_.get(), context)) {
+        return S_OK;
+    }
+
+    const PendingE2eTrace pending = *pending_e2e_trace_;
+    pending_e2e_trace_.reset();
+    const auto ended = std::chrono::steady_clock::now();
+    const auto& trace = pending.trace;
+    const auto milliseconds = [](const auto started, const auto finished) {
+        return std::chrono::duration<double, std::milli>(finished - started).count();
+    };
+
+    const double test_to_key_ms = milliseconds(trace.start, trace.on_key_started);
+    const double key_pre_mode_ms = milliseconds(trace.on_key_started, trace.mode_started);
+    const double mode_ms = milliseconds(trace.mode_started, trace.mode_finished);
+    const double mode_to_ready_ms = milliseconds(trace.mode_finished, trace.ready_started);
+    const double ready_ms = milliseconds(trace.ready_started, trace.ready_finished);
+    const double ready_to_context_ms =
+        milliseconds(trace.ready_finished, trace.pre_context_started);
+    const double pre_context_ms =
+        milliseconds(trace.pre_context_started, trace.pre_context_finished);
+    const double context_to_predict_ms =
+        milliseconds(trace.pre_context_finished, trace.predict_started);
+    const double predict_rtt_ms = milliseconds(trace.predict_started, trace.predict_finished);
+    const double post_predict_ms =
+        milliseconds(trace.predict_finished, pending.edit_request_started);
+    const double edit_wait_ms =
+        milliseconds(pending.edit_request_started, pending.edit_operation_started);
+    const double edit_apply_ms =
+        milliseconds(pending.edit_operation_started, pending.edit_operation_finished);
+    const double edit_prepare_ms =
+        milliseconds(pending.edit_operation_started, pending.edit_set_text_started);
+    const double edit_set_text_ms =
+        milliseconds(pending.edit_set_text_started, pending.edit_set_text_finished);
+    const double edit_attribute_ms =
+        milliseconds(pending.edit_set_text_finished, pending.edit_attribute_finished);
+    const double edit_selection_ms =
+        milliseconds(pending.edit_attribute_finished, pending.edit_operation_finished);
+    const double edit_notify_ms = milliseconds(pending.edit_operation_finished, ended);
+    const double elapsed_ms = milliseconds(trace.start, ended);
+    const double partition_ms =
+        test_to_key_ms + key_pre_mode_ms + mode_ms + mode_to_ready_ms + ready_ms +
+        ready_to_context_ms + pre_context_ms + context_to_predict_ms + predict_rtt_ms +
+        post_predict_ms + edit_wait_ms + edit_apply_ms + edit_notify_ms;
+    const double partition_error_ms = elapsed_ms - partition_ms;
+
+    logger_.log([elapsed_ms, test_to_key_ms, key_pre_mode_ms, mode_ms, mode_to_ready_ms,
+                 ready_ms, ready_to_context_ms, pre_context_ms, context_to_predict_ms,
+                 predict_rtt_ms, post_predict_ms, edit_wait_ms, edit_apply_ms,
+                 edit_prepare_ms, edit_set_text_ms, edit_attribute_ms, edit_selection_ms,
+                 edit_notify_ms, partition_ms, partition_error_ms, key = trace.key,
+                 sequence = trace.sequence, started_at_on_test = trace.started_at_on_test] {
+        return std::format(
+            "[TIME] frontend_e2e_ms={:.3f} sequence={} key={} start={} test_to_key_ms={:.3f} "
+            "key_pre_mode_ms={:.3f} mode_ms={:.3f} mode_to_ready_ms={:.3f} "
+            "ready_ms={:.3f} ready_to_context_ms={:.3f} pre_context_ms={:.3f} "
+            "context_to_predict_ms={:.3f} predict_rtt_ms={:.3f} post_predict_ms={:.3f} "
+            "edit_wait_ms={:.3f} edit_apply_ms={:.3f} edit_prepare_ms={:.3f} "
+            "edit_set_text_ms={:.3f} edit_attribute_ms={:.3f} edit_selection_ms={:.3f} "
+            "edit_notify_ms={:.3f} "
+            "partition_ms={:.3f} partition_error_ms={:.3f} endpoint=on_end_edit",
+            elapsed_ms, sequence, key,
+            started_at_on_test ? "on_test_key_down" : "on_key_down", test_to_key_ms,
+            key_pre_mode_ms, mode_ms,
+            mode_to_ready_ms, ready_ms, ready_to_context_ms, pre_context_ms,
+            context_to_predict_ms, predict_rtt_ms, post_predict_ms, edit_wait_ms,
+            edit_apply_ms, edit_prepare_ms, edit_set_text_ms, edit_attribute_ms,
+            edit_selection_ms, edit_notify_ms, partition_ms, partition_error_ms);
+    });
     return S_OK;
 } catch (...) {
     return handle_com_exception();
@@ -1274,8 +1372,9 @@ HRESULT TextService::insert_text(ITfContext* pContext, const std::u16string& tex
  *
  * Applies the visible composition string to the current TSF context.
  */
-HRESULT TextService::set_composition_text(ITfContext* pContext, const std::u16string& text, size_t select_start,
-                                          size_t select_length) {
+HRESULT TextService::set_composition_text(ITfContext* pContext, const std::u16string& text,
+                                          size_t select_start, size_t select_length,
+                                          std::optional<E2eTrace> e2e_trace) {
     if (!pContext) return E_INVALIDARG;
 
     winrt::com_ptr<ITfContextComposition> contextComposition;
@@ -1287,7 +1386,9 @@ HRESULT TextService::set_composition_text(ITfContext* pContext, const std::u16st
     if (FAILED(hr)) return hr;
 
     winrt::com_ptr<EditSession> editSession = winrt::make_self<EditSession>();
-    editSession->set_operation([=, this](TfEditCookie ec) {
+    std::chrono::steady_clock::time_point edit_request_started;
+    editSession->set_operation([=, this, &edit_request_started](TfEditCookie ec) {
+        const auto edit_operation_started = std::chrono::steady_clock::now();
         winrt::com_ptr<ITfRange> range;
         if (!itfComposition) {
             insertAtSelection->InsertTextAtSelection(ec, TF_IAS_QUERYONLY, nullptr, 0, range.put()) | win::check();
@@ -1299,9 +1400,12 @@ HRESULT TextService::set_composition_text(ITfContext* pContext, const std::u16st
 
         range = nullptr;
         itfComposition->GetRange(range.put()) | win::check();
+        const auto edit_set_text_started = std::chrono::steady_clock::now();
         range->SetText(ec, 0, convu16(text.data()), ULONG(text.size())) | win::check();
+        const auto edit_set_text_finished = std::chrono::steady_clock::now();
 
         apply_composition_display_attribute(pContext, ec, range.get()) | win::check();
+        const auto edit_attribute_finished = std::chrono::steady_clock::now();
 
         const bool select_span = select_start != std::u16string::npos && select_length > 0;
         winrt::com_ptr<ITfRange> selection_range;
@@ -1326,21 +1430,86 @@ HRESULT TextService::set_composition_text(ITfContext* pContext, const std::u16st
         selection.style.ase = select_span ? TF_AE_NONE : TF_AE_END;
         selection.style.fInterimChar = FALSE;
         pContext->SetSelection(ec, 1, &selection) | win::check();
+        if (e2e_trace) {
+            pending_e2e_trace_ = PendingE2eTrace{
+                .trace = *e2e_trace,
+                .edit_request_started = edit_request_started,
+                .edit_operation_started = edit_operation_started,
+                .edit_set_text_started = edit_set_text_started,
+                .edit_set_text_finished = edit_set_text_finished,
+                .edit_attribute_finished = edit_attribute_finished,
+                .edit_operation_finished = std::chrono::steady_clock::now(),
+            };
+        }
     });
-    pContext->RequestEditSession(_tfClientId, editSession.get(), TF_ES_READWRITE | TF_ES_SYNC, &hr) | win::check();
+    if (e2e_trace) {
+        const HRESULT sink_hr = ensure_text_edit_sink(pContext);
+        if (FAILED(sink_hr)) return sink_hr;
+        pending_e2e_trace_.reset();
+    }
+    HRESULT session_hr = E_FAIL;
+    edit_request_started = std::chrono::steady_clock::now();
+    const HRESULT request_hr = pContext->RequestEditSession(
+        _tfClientId, editSession.get(), TF_ES_READWRITE | TF_ES_SYNC, &session_hr);
+    if (FAILED(request_hr) || FAILED(session_hr)) {
+        if (e2e_trace && pending_e2e_trace_ &&
+            pending_e2e_trace_->trace.sequence == e2e_trace->sequence) {
+            pending_e2e_trace_.reset();
+        }
+        return FAILED(request_hr) ? request_hr : session_hr;
+    }
     return S_OK;
 }
 
-void TextService::refresh_composition_after_candidate_finalize(ITfContext* pContext) {
+void TextService::refresh_composition_after_candidate_finalize(
+    ITfContext* pContext, E2eTrace e2e_trace) {
     if (!pContext || compositionBuffer.empty()) {
         return;
     }
 
-    DebugSink::instance().send(
-        L"INFO", L"refresh_composition_after_candidate_finalize text="_u16 + compositionBuffer.to_string());
     compositionBuffer.invalidate_all_predictions();
-    compositionBuffer.predict_paddings(get_pre_composit_context(pContext));
-    set_composition_text(pContext, compositionBuffer.to_string());
+    e2e_trace.pre_context_started = std::chrono::steady_clock::now();
+    auto pre_context = get_pre_composit_context(pContext);
+    e2e_trace.pre_context_finished = std::chrono::steady_clock::now();
+    e2e_trace.predict_started = std::chrono::steady_clock::now();
+    const bool prediction_performed = compositionBuffer.predict_paddings(std::move(pre_context));
+    e2e_trace.predict_finished = std::chrono::steady_clock::now();
+    set_composition_text(pContext, compositionBuffer.to_string(), std::u16string::npos, 0,
+                         prediction_performed ? std::optional<E2eTrace>(e2e_trace)
+                                              : std::nullopt);
+}
+
+HRESULT TextService::ensure_text_edit_sink(ITfContext* context) {
+    if (!context) return E_INVALIDARG;
+    if (text_edit_sink_context_ && same_com_object(text_edit_sink_context_.get(), context) &&
+        text_edit_sink_cookie_ != TF_INVALID_COOKIE) {
+        return S_OK;
+    }
+
+    unadvise_text_edit_sink();
+    winrt::com_ptr<ITfSource> source;
+    HRESULT hr = context->QueryInterface<ITfSource>(source.put());
+    if (FAILED(hr)) return hr;
+
+    DWORD cookie = TF_INVALID_COOKIE;
+    hr = source->AdviseSink(IID_ITfTextEditSink, static_cast<ITfTextEditSink*>(this), &cookie);
+    if (FAILED(hr)) return hr;
+
+    text_edit_sink_context_.copy_from(context);
+    text_edit_sink_cookie_ = cookie;
+    return S_OK;
+}
+
+void TextService::unadvise_text_edit_sink() noexcept {
+    pending_e2e_trace_.reset();
+    if (text_edit_sink_context_ && text_edit_sink_cookie_ != TF_INVALID_COOKIE) {
+        winrt::com_ptr<ITfSource> source;
+        if (SUCCEEDED(text_edit_sink_context_->QueryInterface<ITfSource>(source.put()))) {
+            source->UnadviseSink(text_edit_sink_cookie_);
+        }
+    }
+    text_edit_sink_cookie_ = TF_INVALID_COOKIE;
+    text_edit_sink_context_ = nullptr;
 }
 
 void TextService::show_candidate_list_for_current_input(ITfContext* pContext, bool expand) {

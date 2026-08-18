@@ -10,7 +10,6 @@
 
 #include "system/sysutil.hpp"
 #include "candidateUiClient.hpp"
-#include "utils/debugSink.hpp"
 
 namespace tsf {
 
@@ -48,8 +47,6 @@ public:
 
     HRESULT Show(BOOL bShow) override {
         shown_ = (bShow != FALSE);
-        DebugSink::instance().send(
-            L"INFO", L"CandidateListUIElement::Show bShow=" + std::wstring(shown_ ? L"TRUE" : L"FALSE"));
         if (shown_) {
             refresh_window();
         } else {
@@ -165,8 +162,6 @@ public:
     }
 
     HRESULT Finalize() override {
-        DebugSink::instance().send(
-            L"INFO", L"CandidateListUIElement::Finalize selection=" + std::to_wstring(selection_index));
         if (finalize_callback && !candidates.empty() && selection_index < candidates.size()) {
             finalize_callback(candidates[selection_index]);
         }
@@ -175,7 +170,6 @@ public:
     }
 
     HRESULT Abort() override {
-        DebugSink::instance().send(L"INFO", L"CandidateListUIElement::Abort");
         candidate_ui_client_.hide();
         return S_OK;
     }
@@ -184,10 +178,6 @@ public:
     void set_anchor_rect(const RECT& rect) {
         anchor_rect = rect;
         has_anchor_rect = true;
-        DebugSink::instance().send(
-            L"INFO", L"CandidateListUIElement::set_anchor_rect [" + std::to_wstring(rect.left) + L"," +
-                         std::to_wstring(rect.top) + L"," + std::to_wstring(rect.right) + L"," +
-                         std::to_wstring(rect.bottom) + L"]");
     }
 
     void clear_anchor_rect() {
@@ -212,8 +202,6 @@ public:
         current_page = 0;
         expanded = false;
         finalize_callback = std::move(callback);
-        DebugSink::instance().send(
-            L"INFO", L"CandidateListUIElement::update candidates=" + std::to_wstring(candidates.size()));
         refresh_window();
     }
 

@@ -1,7 +1,6 @@
 #include "candidateUiClient.hpp"
 
 #include "system/globals.h"
-#include "utils/debugSink.hpp"
 
 #include <filesystem>
 #include <optional>
@@ -162,7 +161,6 @@ bool CandidateUiClient::connect_pipe() {
     if (pipe_ == INVALID_HANDLE_VALUE) {
         return false;
     }
-    DebugSink::instance().send(L"UI", L"candidate UI pipe connected");
     return true;
 }
 

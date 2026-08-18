@@ -1,14 +1,12 @@
 #include "candidateUiController.hpp"
 
 #include "editSession.hpp"
-#include "utils/debugSink.hpp"
 
 namespace tsf {
 
 void CandidateUiController::attach(ITfThreadMgr* thread_mgr, TfClientId client_id) {
     thread_mgr_.copy_from(thread_mgr);
     client_id_ = client_id;
-    DebugSink::instance().send(L"INFO", L"CandidateUiController::attach backend=service pipe");
 }
 
 void CandidateUiController::detach() {
@@ -30,8 +28,6 @@ CandidateKeyResult CandidateUiController::handle_key(WPARAM wParam) {
     if (!is_active()) {
         return CandidateKeyResult::not_handled;
     }
-
-    DebugSink::instance().send(L"INFO", L"CandidateUiController::handle_key key=" + std::to_wstring(wParam));
 
     const CandidateKeyResult result = element_->handle_key(wParam);
     if (result == CandidateKeyResult::aborted || result == CandidateKeyResult::not_handled) {

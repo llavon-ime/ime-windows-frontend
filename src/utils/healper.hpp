@@ -1,6 +1,7 @@
 #pragma once
 
 #include <windows.h>
+#include <llavon-debug/logger.hpp>
 #include <winrt/base.h>
 
 #include <cstdint>
@@ -12,8 +13,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
-
-#include "debugSink.hpp"
+#include <utility>
 
 namespace tsf {
 
@@ -35,34 +35,38 @@ inline void operator|(HRESULT hr, const win::check& checker) {
         const std::string file = location.file_name();
         const std::string function = location.function_name();
 
-        const std::string detail =
-            std::format("HRESULT failure: {:#x} at {}:{} in {}", hr, file, location.line(), function);
-
-        DebugSink::instance().send(L"ERROR", detail);
-
         const std::string message =
             std::format("HRESULT failure: {:#x} at {}:{} in {}", hr, file, location.line(), function);
         throw winrt::hresult_error(hr, winrt::to_hstring(message));
     }
 }
 
-inline HRESULT handle_com_exception(std::source_location location = std::source_location::current()) noexcept {
-    const auto trace = std::stacktrace::current();
-    auto log_trace = [&trace]() {
-        for (std::size_t i = 1; i < trace.size(); ++i) {
-            const auto& entry = trace[i];
-            const auto description = entry.description();
-            const auto file = entry.source_file();
-            const auto line = entry.source_line();
-
-            if (!file.empty()) {
-                DebugSink::instance().send(
-                    L"ERROR", std::format("  #{} {} ({}:{})", i - 1, description, file, line));
-            } else {
-                DebugSink::instance().send(L"ERROR", std::format("  #{} {}", i - 1, description));
+inline void log_com_exception(llavon::debug::Logger& logger, std::string detail,
+                              std::stacktrace trace) noexcept {
+    try {
+        logger.log([detail = std::move(detail), trace = std::move(trace)] {
+            std::string message = "[ERROR] " + detail;
+            for (std::size_t i = 1; i < trace.size(); ++i) {
+                const auto& entry = trace[i];
+                const auto description = entry.description();
+                const auto file = entry.source_file();
+                if (file.empty()) {
+                    message += std::format("\n  #{} {}", i - 1, description);
+                } else {
+                    message += std::format("\n  #{} {} ({}:{})", i - 1, description,
+                                           file, entry.source_line());
+                }
             }
-        }
-    };
+            return message;
+        });
+    } catch (...) {
+    }
+}
+
+inline HRESULT handle_com_exception(
+    llavon::debug::Logger& logger,
+    std::source_location location = std::source_location::current()) noexcept {
+    const auto trace = std::stacktrace::current();
 
     try {
         throw;
@@ -70,22 +74,19 @@ inline HRESULT handle_com_exception(std::source_location location = std::source_
         const std::string detail = std::format(
             "COM exception at {}:{} in {}: hr={:#x}, msg={}", location.file_name(), location.line(),
             location.function_name(), static_cast<std::uint32_t>(e.code().value), winrt::to_string(e.message()));
-        DebugSink::instance().send(L"ERROR", detail);
-        log_trace();
+        log_com_exception(logger, detail, trace);
         return e.code();
     } catch (const std::exception& e) {
         const std::string detail = std::format(
             "COM exception at {}:{} in {}: {}", location.file_name(), location.line(), location.function_name(),
             e.what());
-        DebugSink::instance().send(L"ERROR", detail);
-        log_trace();
+        log_com_exception(logger, detail, trace);
         return E_FAIL;
     } catch (...) {
         const std::string detail = std::format(
             "COM exception at {}:{} in {}: unknown exception", location.file_name(), location.line(),
             location.function_name());
-        DebugSink::instance().send(L"ERROR", detail);
-        log_trace();
+        log_com_exception(logger, detail, trace);
         return E_FAIL;
     }
 }

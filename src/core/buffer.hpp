@@ -137,7 +137,6 @@ public:
     }
     void add(char16_t ch) {
         std::lock_guard lock(mutex);
-        DebugSink::instance().send(L"INFO", ch);
         if (idx >= 0 && idx < static_cast<int>(buffer.size()) && buffer[idx].is_invalid()) {
             buffer.erase(buffer.begin() + idx);
             idx--;
@@ -146,7 +145,6 @@ public:
             idx++;
             // buffer.insert(buffer.begin() + idx, {}); 會炸 我操你媽的標準委員會
             buffer.insert(buffer.begin() + idx, BopomofoPos{});
-            DebugSink::instance().send(L"INFO", std::to_string(idx) + " wtf " + std::to_string(buffer.size()));
             buffer[idx].accept(ch);
         } else {
             // current accept this ch
@@ -169,16 +167,15 @@ public:
         }
         buffer[idx].predicted = true;
     }
-    void predict_paddings(std::u16string context) {
-        DebugSink::instance().send(L"INFO", u"context : " + context);
+    bool predict_paddings(std::u16string context) {
         if (buffer.empty()) {
-            return;
+            return false;
         }
 
         bool need_predict = false;
         for (auto& item : buffer) {
             if (!item.is_predictable_by_engine()) {
-                return;
+                return false;
             }
             if (!item.predicted) {
                 need_predict = true;
@@ -186,15 +183,15 @@ public:
             }
         }
         if (!need_predict) {
-            return;
+            return false;
         }
 
         auto engine = get_engine();
         engine->predict(context, std::span<BopomofoPos>(buffer.begin(), buffer.end()));
+        return true;
     }
     BopomofoPos& cur() {
         if (idx < 0 || idx >= buffer.size()) {
-            DebugSink::instance().send(L"ERROR", "out of range");
             throw std::runtime_error("out of range");
         }
         return buffer[idx];
@@ -202,7 +199,6 @@ public:
     BopomofoPos& candidate_target() {
         const int target = candidate_target_index();
         if (target < 0 || target >= static_cast<int>(buffer.size())) {
-            DebugSink::instance().send(L"ERROR", "candidate target out of range");
             throw std::runtime_error("candidate target out of range");
         }
         return buffer[target];
