@@ -361,13 +361,41 @@ TextService::TextService() : candidate_ui_(std::make_unique<CandidateUiControlle
 
 TextService::~TextService() = default;
 
-//FIXME: shouldn't be in tsf?
-std::optional<std::u16string> TextService::multifuntional_shortcut(WPARAM wParam) {
-    if (!backtick_used_as_modifier_ || key_down(VK_MENU) || modifier_key(wParam)) {
+void TextService::start_backtick_shortcut() {
+    backtick_shortcut_pending_ = true;
+}
+
+std::optional<std::u16string> TextService::preview_backtick_shortcut(WPARAM wParam) const {
+    if (!backtick_shortcut_pending_ || key_down(VK_MENU) || modifier_key(wParam)) {
         return std::nullopt;
     }
-    backtick_used_as_modifier_ = false;
-    //TODO: a UI and more keys(and user-defined?)
+    //TODO: a UI
+    if (key_down(VK_SHIFT)) {
+        switch (wParam) {
+            case VK_OEM_COMMA:
+                return u"《";
+            case VK_OEM_PERIOD:
+                return u"》";
+            case VK_OEM_1:
+                return u"：";
+            case VK_OEM_7:
+                return u"＂";
+            case VK_OEM_4:
+                return u"『";
+            case VK_OEM_6:
+                return u"』";
+            case '1':
+                return u"！";
+            case '9':
+                return u"（";
+            case '0':
+                return u"）";
+            case VK_OEM_2:
+                return u"？";
+            default:
+                return std::nullopt;
+        }
+    }
     switch (wParam) {
         case VK_OEM_COMMA:
             return u"，";
@@ -390,6 +418,18 @@ std::optional<std::u16string> TextService::multifuntional_shortcut(WPARAM wParam
         default:
             return std::nullopt;
     }
+}
+
+std::optional<std::u16string> TextService::consume_backtick_shortcut(WPARAM wParam) {
+    auto shortcut = preview_backtick_shortcut(wParam);
+    if (backtick_shortcut_pending_ && !modifier_key(wParam)) {
+        cancel_backtick_shortcut();
+    }
+    return shortcut;
+}
+
+void TextService::cancel_backtick_shortcut() {
+    backtick_shortcut_pending_ = false;
 }
 
 /**
@@ -487,6 +527,7 @@ HRESULT TextService::activate(ITfThreadMgr* pThreadMgr, TfClientId tfClientId) {
 void TextService::deactivate() {
     DebugSink::instance().send(L"IME", L"Deactivated");
     candidate_ui_->hide();
+    cancel_backtick_shortcut();
     DebugSink::instance().disconnect();
 
     if (itfComposition) {
@@ -585,6 +626,7 @@ STDMETHODIMP TextService::OnUninitDocumentMgr(ITfDocumentMgr* /*pDocMgr*/) try {
  * Receives document focus changes but does not react to them yet.
  */
 STDMETHODIMP TextService::OnSetFocus(ITfDocumentMgr* /*pDocMgrFocus*/, ITfDocumentMgr* /*pDocMgrPrevFocus*/) try {
+    cancel_backtick_shortcut();
     refresh_input_mode_indicator();
     return S_OK;
 } catch (...) {
@@ -612,12 +654,14 @@ STDMETHODIMP TextService::OnPopContext(ITfContext* /*pContext*/) try { return S_
 /**
  * @brief Implements ITfKeyEventSink::OnSetFocus.
  *
- * Tracks foreground changes but currently keeps no extra state.
+ * Refreshes foreground state and cancels an unfinished backtick prefix on blur.
  */
 STDMETHODIMP TextService::OnSetFocus(BOOL fForeground) try {
-    if (fForeground) {
-        refresh_input_mode_indicator();
+    if (!fForeground) {
+        cancel_backtick_shortcut();
+        return S_OK;
     }
+    refresh_input_mode_indicator();
     return S_OK;
 } catch (...) {
     return handle_com_exception();
@@ -637,14 +681,14 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* /*pContext*/, WPARAM wParam,
         return S_OK;
     }
 
-    if (key_down(VK_SHIFT)) {
-        shift_toggle_pending_ = false;
-        shift_used_as_modifier_ = true;
+    const bool english_mode = read_backend_input_mode() == InputMode::English;
+    if (!english_mode && wParam == VK_OEM_3) {
+        *pfEaten = TRUE;
+        return S_OK;
     }
 
-    const bool english_mode = read_backend_input_mode() == InputMode::English;
-    if (english_mode && compositionBuffer.empty()) {
-        *pfEaten = (punctuation_shortcut(wParam)  || multifuntional_shortcut(wParam) || english_printable_key(wParam)) ? TRUE : FALSE;
+    if (english_mode && english_printable_key(wParam)) {
+        *pfEaten = TRUE;
         return S_OK;
     }
 
@@ -653,17 +697,12 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* /*pContext*/, WPARAM wParam,
         return S_OK;
     }
 
-    if (multifuntional_shortcut(wParam)) {
+    if (preview_backtick_shortcut(wParam)) {
         *pfEaten = TRUE;
         return S_OK;
     }
 
     if (shifted_printable_symbol_text(wParam, lParam)) {
-        *pfEaten = TRUE;
-        return S_OK;
-    }
-
-    if (english_mode && english_printable_key(wParam)) {
         *pfEaten = TRUE;
         return S_OK;
     }
@@ -736,15 +775,16 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* pContext, WPARAM wParam, LPARAM 
         shift_toggle_pending_ = false;
         shift_used_as_modifier_ = true;
     }
-    if (key_down(VK_OEM_3) && !backtick_used_as_modifier_) {
-        backtick_used_as_modifier_ = true;
+    
+    const bool english_mode = read_backend_input_mode() == InputMode::English;
+    if (!english_mode && wParam == VK_OEM_3) {
+        start_backtick_shortcut();
         *pfEaten = TRUE;
         return S_OK;
     }
-
-    const bool english_mode = read_backend_input_mode() == InputMode::English;
+    
     auto punctuation = punctuation_shortcut(wParam);
-    if (!punctuation) punctuation = multifuntional_shortcut(wParam);
+    if (!punctuation) punctuation = consume_backtick_shortcut(wParam);
     if (punctuation) {
         compositionBuffer.add_chosen_candidate((*punctuation)[0]);
         set_composition_text(pContext, compositionBuffer.to_string());
@@ -823,8 +863,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* pContext, WPARAM wParam, LPARAM 
         DebugSink::instance().send(L"CANCEL", compositionBuffer.to_string());
         discard_composition(pContext);
 
-        //used in multifunctional shortcut handling
-        backtick_used_as_modifier_ = false;
+        cancel_backtick_shortcut();
         *pfEaten = TRUE;
         return S_OK;
     }
