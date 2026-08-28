@@ -6,6 +6,7 @@
 
 #include "bopomofo.hpp"
 #include "engine/engine.hpp"
+#include "feedback/feedback_log.hpp"
 using namespace std::literals;
 
 namespace tsf {
@@ -34,6 +35,35 @@ class CompositionBuffer {
     std::vector<BopomofoPos> buffer;
     std::mutex mutex;
     int idx = -1;
+    bool feedback_invalid_ = false;
+
+    bool has_feedback() const {
+        for (const auto& item : buffer) {
+            if (item.feedback_original) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    static bool sentence_terminal(char32_t ch) {
+        switch (ch) {
+            case U'.':
+            case U'!':
+            case U'?':
+            case U';':
+            case U'\n':
+            case U'\r':
+            case U'。':
+            case U'！':
+            case U'？':
+            case U'；':
+            case U'…':
+                return true;
+            default:
+                return false;
+        }
+    }
 
     int candidate_target_index() const {
         if (buffer.empty()) return -1;
@@ -65,6 +95,10 @@ public:
     bool remove_last() {
         std::lock_guard lock(mutex);
         if (idx < 0 || idx >= static_cast<int>(buffer.size())) return false;
+
+        if (has_feedback()) {
+            feedback_invalid_ = true;
+        }
 
         bool removed = false;
         if (buffer[idx].is_compositable()) {
@@ -98,6 +132,7 @@ public:
     void clear() {
         buffer.clear();
         idx = -1;
+        feedback_invalid_ = false;
     }
     bool empty() const {
         return buffer.empty();
@@ -137,6 +172,9 @@ public:
     }
     void add(char16_t ch) {
         std::lock_guard lock(mutex);
+        if (has_feedback() && idx + 1 < static_cast<int>(buffer.size())) {
+            feedback_invalid_ = true;
+        }
         DebugSink::instance().send(L"INFO", ch);
         if (idx >= 0 && idx < static_cast<int>(buffer.size()) && buffer[idx].is_invalid()) {
             buffer.erase(buffer.begin() + idx);
@@ -155,6 +193,9 @@ public:
     }
     void add_chosen_candidate(char32_t ch) {
         std::lock_guard lock(mutex);
+        if (has_feedback() && idx + 1 < static_cast<int>(buffer.size())) {
+            feedback_invalid_ = true;
+        }
         if (idx >= 0 && idx < static_cast<int>(buffer.size()) && buffer[idx].is_invalid()) {
             buffer.erase(buffer.begin() + idx);
             idx--;
@@ -213,6 +254,51 @@ public:
             res += item.current();
         }
         return res;
+    }
+
+    std::vector<FeedbackRecord> feedback_records() const {
+        std::vector<FeedbackRecord> records;
+        if (feedback_invalid_ || !has_feedback()) {
+            return records;
+        }
+
+        for (size_t correction = 0; correction < buffer.size(); ++correction) {
+            const auto& corrected_item = buffer[correction];
+            if (!corrected_item.feedback_original) {
+                continue;
+            }
+            if (*corrected_item.feedback_original == corrected_item.current32()) {
+                continue;
+            }
+
+            size_t sentence_start = 0;
+            for (size_t i = correction; i > 0; --i) {
+                const auto& previous = buffer[i - 1];
+                if (previous.is_compositable() && sentence_terminal(previous.current32())) {
+                    sentence_start = i;
+                    break;
+                }
+            }
+
+            size_t sentence_end = buffer.size();
+            for (size_t i = correction; i < buffer.size(); ++i) {
+                const auto& item = buffer[i];
+                if (item.is_compositable() && sentence_terminal(item.current32())) {
+                    sentence_end = i + 1;
+                    break;
+                }
+            }
+
+            FeedbackRecord record;
+            record.bopomofo = corrected_item.feedback_bopomofo;
+            utf8::append16(*corrected_item.feedback_original, record.original);
+            utf8::append16(corrected_item.current32(), record.selected);
+            for (size_t i = sentence_start; i < sentence_end; ++i) {
+                record.sentence += buffer[i].current();
+            }
+            records.push_back(std::move(record));
+        }
+        return records;
     }
 };
 

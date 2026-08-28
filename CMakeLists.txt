@@ -41,6 +41,7 @@ target_link_libraries(llavon-ime PRIVATE
     Microsoft::CppWinRT
     WindowsApp
     advapi32    # Registry API
+    shell32     # LocalAppData known folder
     ole32       # COM
     oleaut32    # COM Automation
     uuid        # TSF GUID constants

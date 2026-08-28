@@ -9,6 +9,7 @@
 #include "core/bopomofo.hpp"
 #include "editSession.hpp"
 #include "engine/engine.hpp"
+#include "feedback/feedback_log.hpp"
 #include "inputModeLangBarItem.hpp"
 #include "system/globals.h"
 #include "utils/debugSink.hpp"
@@ -1165,8 +1166,10 @@ HRESULT TextService::end_composition(ITfContext* pContext) {
     }
 
     const std::u16string text = compositionBuffer.to_string();
+    const std::vector<FeedbackRecord> feedback = compositionBuffer.feedback_records();
+    bool committed = false;
     winrt::com_ptr<EditSession> editSession = winrt::make_self<EditSession>();
-    editSession->set_operation([this, pContext, text](TfEditCookie ec) {
+    editSession->set_operation([this, pContext, text, &committed](TfEditCookie ec) {
         before_return cleanup([this]() { clear_composition_state(); });
         if (itfComposition) {
             winrt::com_ptr<ITfRange> range;
@@ -1185,13 +1188,17 @@ HRESULT TextService::end_composition(ITfContext* pContext) {
             selection.style.ase = TF_AE_END;
             selection.style.fInterimChar = FALSE;
             pContext->SetSelection(ec, 1, &selection) | win::check();
-
+            committed = true;
         }
     });
 
     HRESULT hrSession;
     pContext->RequestEditSession(_tfClientId, editSession.get(), TF_ES_READWRITE | TF_ES_SYNC, &hrSession) |
         win::check();
+
+    if (committed && !FeedbackLog::append(feedback)) {
+        DebugSink::instance().send(L"ERROR", L"Unable to append automatic feedback log");
+    }
 
     return S_OK;
 }

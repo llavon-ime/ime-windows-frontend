@@ -271,6 +271,8 @@ struct BopomofoPos {
 
     // TODO temp
     std::optional<std::vector<char32_t>> predicted_candidate;
+    std::optional<char32_t> feedback_original;
+    std::u16string feedback_bopomofo;
     bool accept(char16_t c) {
         if (is_compositable() || invalid) {
             return false;
@@ -345,6 +347,15 @@ public:
         candidates = {ch};
     }
     void set_choose_index(int idx) {
+        if (idx < 0 || idx >= static_cast<int>(candidates.size())) {
+            throw std::out_of_range("candidate index out of range");
+        }
+        const char32_t original = current32();
+        const char32_t selected = candidates[static_cast<size_t>(idx)];
+        if (!feedback_original && original != selected) {
+            feedback_original = original;
+            feedback_bopomofo = to_bopomofo_string();
+        }
         choose_index = idx;
         chosen = true;
         predicted = true;
@@ -365,6 +376,8 @@ public:
         chosen = false;
         predicted = false;
         predicted_candidate.reset();
+        feedback_original.reset();
+        feedback_bopomofo.clear();
         candidates.clear();
 
         if (tone) { tone = 0; return true; }
