@@ -40,7 +40,6 @@ find_package(utf8cpp CONFIG REQUIRED)
 target_link_libraries(llavon-ime PRIVATE
     Microsoft::CppWinRT
     WindowsApp
-    gdiplus
     advapi32    # Registry API
     ole32       # COM
     oleaut32    # COM Automation

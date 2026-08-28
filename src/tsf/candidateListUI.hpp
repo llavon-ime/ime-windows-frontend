@@ -9,7 +9,7 @@
 #include <vector>
 
 #include "system/sysutil.hpp"
-#include "ui/candidateWindow.hpp"
+#include "candidateUiClient.hpp"
 #include "utils/debugSink.hpp"
 
 namespace tsf {
@@ -53,7 +53,7 @@ public:
         if (shown_) {
             refresh_window();
         } else {
-            candidate_window.hide();
+            candidate_ui_client_.hide();
         }
         return S_OK;
     }
@@ -170,26 +170,36 @@ public:
         if (finalize_callback && !candidates.empty() && selection_index < candidates.size()) {
             finalize_callback(candidates[selection_index]);
         }
-        candidate_window.hide();
+        candidate_ui_client_.hide();
         return S_OK;
     }
 
     HRESULT Abort() override {
         DebugSink::instance().send(L"INFO", L"CandidateListUIElement::Abort");
-        candidate_window.hide();
+        candidate_ui_client_.hide();
         return S_OK;
     }
 
 public:
-    void set_anchor_point(const POINT& pt) {
-        anchor_point = pt;
-        has_anchor_point = true;
-        DebugSink::instance().send(L"INFO", L"CandidateListUIElement::set_anchor_point (" + std::to_wstring(pt.x) +
-                                                L"," + std::to_wstring(pt.y) + L")");
+    void set_anchor_rect(const RECT& rect) {
+        anchor_rect = rect;
+        has_anchor_rect = true;
+        DebugSink::instance().send(
+            L"INFO", L"CandidateListUIElement::set_anchor_rect [" + std::to_wstring(rect.left) + L"," +
+                         std::to_wstring(rect.top) + L"," + std::to_wstring(rect.right) + L"," +
+                         std::to_wstring(rect.bottom) + L"]");
     }
 
-    void clear_anchor_point() {
-        has_anchor_point = false;
+    void clear_anchor_rect() {
+        has_anchor_rect = false;
+    }
+
+    void set_owner_window(HWND window) noexcept {
+        owner_window = window;
+    }
+
+    void disconnect() noexcept {
+        candidate_ui_client_.disconnect();
     }
 
     bool is_shown() const {
@@ -357,10 +367,11 @@ private:
     UINT current_page = 0;
     bool shown_ = false;
     bool expanded = false;
-    bool has_anchor_point = false;
-    POINT anchor_point = {};
+    bool has_anchor_rect = false;
+    RECT anchor_rect = {};
+    HWND owner_window = nullptr;
     std::function<void(std::wstring)> finalize_callback;
-    CandidateWindow candidate_window;
+    CandidateUiClient candidate_ui_client_;
 
 private:
     UINT page_count() const {
@@ -377,9 +388,7 @@ private:
 
     void refresh_window() {
         if (candidates.empty()) {
-            candidate_window.set_layout_columns(1);
-            candidate_window.set_number_column(0);
-            candidate_window.update_candidates({});
+            candidate_ui_client_.hide();
             return;
         }
 
@@ -424,19 +433,31 @@ private:
         const UINT number_column = current_page - start_page;
         const UINT local_selection = number_column * page_size + offset;
 
-        candidate_window.set_layout_columns(visible_pages);
-        candidate_window.set_number_column(number_column);
-        candidate_window.set_page_navigation(current_page > 0, current_page + 1 < pages);
-        candidate_window.update_candidates(page_items);
-        candidate_window.set_selection(local_selection);
-
-        if (shown_) {
-            if (has_anchor_point) {
-                candidate_window.show_at(anchor_point.x, anchor_point.y);
-            } else {
-                candidate_window.show_near_cursor();
-            }
+        if (!shown_) {
+            return;
         }
+
+        RECT presentation_anchor = anchor_rect;
+        if (!has_anchor_rect) {
+            POINT cursor = {};
+            if (GetCursorPos(&cursor) == FALSE) {
+                return;
+            }
+            presentation_anchor = RECT{cursor.x, cursor.y, cursor.x, cursor.y};
+        }
+
+        CandidateUiPresentation presentation;
+        presentation.owner_window = static_cast<uint64_t>(reinterpret_cast<ULONG_PTR>(owner_window));
+        presentation.anchor_x = presentation_anchor.left;
+        presentation.anchor_y = presentation_anchor.bottom;
+        presentation.anchor_top = presentation_anchor.top;
+        presentation.candidates = std::move(page_items);
+        presentation.selection_index = local_selection;
+        presentation.layout_columns = visible_pages;
+        presentation.number_column = number_column;
+        presentation.can_prev_page = current_page > 0;
+        presentation.can_next_page = current_page + 1 < pages;
+        candidate_ui_client_.present(presentation);
     }
 };
 

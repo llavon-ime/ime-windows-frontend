@@ -82,11 +82,16 @@ private:
     std::optional<std::u16string> preview_backtick_shortcut(WPARAM wParam) const;
     std::optional<std::u16string> consume_backtick_shortcut(WPARAM wParam);
     void cancel_backtick_shortcut();
+    bool context_accepts_input(ITfContext* context) const;
+    bool composition_belongs_to(ITfContext* context) const;
+    bool has_composition_state() const;
+    void clear_composition_state();
 
     winrt::com_ptr<ITfThreadMgr> threadMgr;
     TfClientId _tfClientId = TF_CLIENTID_NULL;
     DWORD dwThreadMgrEventSinkCookie = TF_INVALID_COOKIE;
     winrt::com_ptr<ITfComposition> itfComposition;
+    winrt::com_ptr<ITfContext> composition_context_;
     std::unique_ptr<CandidateUiController> candidate_ui_;
     winrt::com_ptr<InputModeLangBarItem> input_mode_lang_bar_item_;
     CompositionBuffer compositionBuffer;

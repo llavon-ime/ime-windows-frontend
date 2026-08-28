@@ -27,7 +27,8 @@ public:
 
 private:
     winrt::com_ptr<ITfUIElementMgr> get_ui_element_mgr() const;
-    bool query_anchor(ITfContext* context, POINT* anchor) const;
+    bool query_owner_window(ITfContext* context, HWND* owner_window) const;
+    bool query_anchor_rect(ITfContext* context, RECT* anchor_rect) const;
     void dismiss_ui_element();
 
     winrt::com_ptr<ITfThreadMgr> thread_mgr_;
