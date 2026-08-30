@@ -27,3 +27,20 @@ The DLL keeps TSF composition, candidate state, keyboard behavior, and
 `\\.\pipe\llavon-ime`; render-ready candidate snapshots use the independent
 `\\.\pipe\llavon-ime-candidate-ui`. The candidate HWND and XAML island are
 owned by `llavon-ime-candidate-ui.dll` in the service process.
+
+## Automatic feedback
+
+When a user replaces the IME prediction with a different candidate, a successful
+composition commit appends one local sample to
+`%LOCALAPPDATA%\Llavon IME\feedback.jsonl`. Each line uses validation-set schema
+version 1:
+
+```json
+{"schemaVersion":1,"license":"CC-BY-4.0","context":"我今天想吃","answer":"早餐","padding":[{"syllable":"ㄗㄠ","tone":3},{"syllable":"ㄘㄢ","tone":1}],"difficulty":1}
+```
+
+`context` is the text before the pending composition; `answer` and `padding`
+contain the finalized pending composition. Automatic samples use difficulty 1.
+Feedback is discarded after backspace or insertion before the composition tail.
+Pending text that cannot provide one valid Zhuyin syllable per answer character
+is not logged.

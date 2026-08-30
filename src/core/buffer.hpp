@@ -6,6 +6,7 @@
 
 #include "bopomofo.hpp"
 #include "engine/engine.hpp"
+#include "feedback/feedback_log.hpp"
 using namespace std::literals;
 
 namespace tsf {
@@ -34,6 +35,42 @@ class CompositionBuffer {
     std::vector<BopomofoPos> buffer;
     std::mutex mutex;
     int idx = -1;
+    bool feedback_invalid_ = false;
+
+    bool has_feedback() const {
+        for (const auto& item : buffer) {
+            if (item.feedback_original) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    bool has_effective_feedback() const {
+        for (const auto& item : buffer) {
+            if (item.feedback_original && *item.feedback_original != item.current32()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    static std::optional<int> validation_tone(const BopomofoPos& item) {
+        switch (item.tone) {
+            case u' ':
+                return 1;
+            case u'ˊ':
+                return 2;
+            case u'ˇ':
+                return 3;
+            case u'ˋ':
+                return 4;
+            case u'˙':
+                return 5;
+            default:
+                return std::nullopt;
+        }
+    }
 
     int candidate_target_index() const {
         if (buffer.empty()) return -1;
@@ -65,6 +102,10 @@ public:
     bool remove_last() {
         std::lock_guard lock(mutex);
         if (idx < 0 || idx >= static_cast<int>(buffer.size())) return false;
+
+        if (has_feedback()) {
+            feedback_invalid_ = true;
+        }
 
         bool removed = false;
         if (buffer[idx].is_compositable()) {
@@ -98,6 +139,7 @@ public:
     void clear() {
         buffer.clear();
         idx = -1;
+        feedback_invalid_ = false;
     }
     bool empty() const {
         return buffer.empty();
@@ -137,6 +179,9 @@ public:
     }
     void add(char16_t ch) {
         std::lock_guard lock(mutex);
+        if (has_feedback() && idx + 1 < static_cast<int>(buffer.size())) {
+            feedback_invalid_ = true;
+        }
         DebugSink::instance().send(L"INFO", ch);
         if (idx >= 0 && idx < static_cast<int>(buffer.size()) && buffer[idx].is_invalid()) {
             buffer.erase(buffer.begin() + idx);
@@ -155,6 +200,9 @@ public:
     }
     void add_chosen_candidate(char32_t ch) {
         std::lock_guard lock(mutex);
+        if (has_feedback() && idx + 1 < static_cast<int>(buffer.size())) {
+            feedback_invalid_ = true;
+        }
         if (idx >= 0 && idx < static_cast<int>(buffer.size()) && buffer[idx].is_invalid()) {
             buffer.erase(buffer.begin() + idx);
             idx--;
@@ -213,6 +261,40 @@ public:
             res += item.current();
         }
         return res;
+    }
+
+    bool has_recordable_feedback() const {
+        return !feedback_invalid_ && has_effective_feedback();
+    }
+
+    std::optional<FeedbackRecord> feedback_record(std::u16string context) const {
+        if (!has_recordable_feedback() || buffer.empty() || buffer.size() > 32) {
+            return std::nullopt;
+        }
+
+        FeedbackRecord record;
+        record.context = std::move(context);
+        record.answer = to_string();
+        record.padding.reserve(buffer.size());
+
+        for (const auto& item : buffer) {
+            const auto tone_number = validation_tone(item);
+            if (!item.is_compositable() || !tone_number) {
+                return std::nullopt;
+            }
+
+            FeedbackPadding padding;
+            if (item.initial) padding.syllable.push_back(item.initial);
+            if (item.medial) padding.syllable.push_back(item.medial);
+            if (item.final) padding.syllable.push_back(item.final);
+            if (padding.syllable.empty()) {
+                return std::nullopt;
+            }
+            padding.tone = *tone_number;
+            record.padding.push_back(std::move(padding));
+        }
+
+        return record;
     }
 };
 

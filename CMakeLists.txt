@@ -37,10 +37,14 @@ find_package(cppwinrt CONFIG REQUIRED)
 find_package(jsoncons CONFIG REQUIRED)
 find_package(utf8cpp CONFIG REQUIRED)
 
+include(CTest)
+
 target_link_libraries(llavon-ime PRIVATE
     Microsoft::CppWinRT
     WindowsApp
     advapi32    # Registry API
+    shell32     # LocalAppData known folder
+    normaliz    # Unicode NFC normalization for validation samples
     ole32       # COM
     oleaut32    # COM Automation
     uuid        # TSF GUID constants
@@ -62,3 +66,29 @@ install(TARGETS llavon-ime
     LIBRARY DESTINATION bin
     ARCHIVE DESTINATION lib
 )
+
+if(BUILD_TESTING)
+    add_executable(feedback-log-tests
+        tests/feedback_log_tests.cpp
+        src/feedback/feedback_log.cpp
+        src/feedback/feedback_log.hpp
+    )
+    target_compile_features(feedback-log-tests PRIVATE cxx_std_23)
+    target_compile_definitions(feedback-log-tests PRIVATE
+        WIN32_LEAN_AND_MEAN
+        NOMINMAX
+        UNICODE
+        _UNICODE
+    )
+    target_compile_options(feedback-log-tests PRIVATE /W4 /WX /utf-8)
+    target_include_directories(feedback-log-tests PRIVATE src)
+    target_link_libraries(feedback-log-tests PRIVATE
+        jsoncons
+        utf8::cpp
+        utf8cpp::utf8cpp
+        shell32
+        normaliz
+        ole32
+    )
+    add_test(NAME feedback-log-format COMMAND feedback-log-tests)
+endif()
