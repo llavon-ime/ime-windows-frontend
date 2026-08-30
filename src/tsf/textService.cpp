@@ -1166,7 +1166,10 @@ HRESULT TextService::end_composition(ITfContext* pContext) {
     }
 
     const std::u16string text = compositionBuffer.to_string();
-    const std::vector<FeedbackRecord> feedback = compositionBuffer.feedback_records();
+    std::optional<FeedbackRecord> feedback;
+    if (compositionBuffer.has_recordable_feedback()) {
+        feedback = compositionBuffer.feedback_record(get_pre_composit_context(pContext));
+    }
     bool committed = false;
     winrt::com_ptr<EditSession> editSession = winrt::make_self<EditSession>();
     editSession->set_operation([this, pContext, text, &committed](TfEditCookie ec) {
@@ -1196,7 +1199,7 @@ HRESULT TextService::end_composition(ITfContext* pContext) {
     pContext->RequestEditSession(_tfClientId, editSession.get(), TF_ES_READWRITE | TF_ES_SYNC, &hrSession) |
         win::check();
 
-    if (committed && !FeedbackLog::append(feedback)) {
+    if (committed && feedback && !FeedbackLog::append(*feedback)) {
         DebugSink::instance().send(L"ERROR", L"Unable to append automatic feedback log");
     }
 

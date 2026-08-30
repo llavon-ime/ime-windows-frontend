@@ -46,22 +46,29 @@ class CompositionBuffer {
         return false;
     }
 
-    static bool sentence_terminal(char32_t ch) {
-        switch (ch) {
-            case U'.':
-            case U'!':
-            case U'?':
-            case U';':
-            case U'\n':
-            case U'\r':
-            case U'。':
-            case U'！':
-            case U'？':
-            case U'；':
-            case U'…':
+    bool has_effective_feedback() const {
+        for (const auto& item : buffer) {
+            if (item.feedback_original && *item.feedback_original != item.current32()) {
                 return true;
+            }
+        }
+        return false;
+    }
+
+    static std::optional<int> validation_tone(const BopomofoPos& item) {
+        switch (item.tone) {
+            case u' ':
+                return 1;
+            case u'ˊ':
+                return 2;
+            case u'ˇ':
+                return 3;
+            case u'ˋ':
+                return 4;
+            case u'˙':
+                return 5;
             default:
-                return false;
+                return std::nullopt;
         }
     }
 
@@ -256,49 +263,38 @@ public:
         return res;
     }
 
-    std::vector<FeedbackRecord> feedback_records() const {
-        std::vector<FeedbackRecord> records;
-        if (feedback_invalid_ || !has_feedback()) {
-            return records;
+    bool has_recordable_feedback() const {
+        return !feedback_invalid_ && has_effective_feedback();
+    }
+
+    std::optional<FeedbackRecord> feedback_record(std::u16string context) const {
+        if (!has_recordable_feedback() || buffer.empty() || buffer.size() > 32) {
+            return std::nullopt;
         }
 
-        for (size_t correction = 0; correction < buffer.size(); ++correction) {
-            const auto& corrected_item = buffer[correction];
-            if (!corrected_item.feedback_original) {
-                continue;
-            }
-            if (*corrected_item.feedback_original == corrected_item.current32()) {
-                continue;
+        FeedbackRecord record;
+        record.context = std::move(context);
+        record.answer = to_string();
+        record.padding.reserve(buffer.size());
+
+        for (const auto& item : buffer) {
+            const auto tone_number = validation_tone(item);
+            if (!item.is_compositable() || !tone_number) {
+                return std::nullopt;
             }
 
-            size_t sentence_start = 0;
-            for (size_t i = correction; i > 0; --i) {
-                const auto& previous = buffer[i - 1];
-                if (previous.is_compositable() && sentence_terminal(previous.current32())) {
-                    sentence_start = i;
-                    break;
-                }
+            FeedbackPadding padding;
+            if (item.initial) padding.syllable.push_back(item.initial);
+            if (item.medial) padding.syllable.push_back(item.medial);
+            if (item.final) padding.syllable.push_back(item.final);
+            if (padding.syllable.empty()) {
+                return std::nullopt;
             }
-
-            size_t sentence_end = buffer.size();
-            for (size_t i = correction; i < buffer.size(); ++i) {
-                const auto& item = buffer[i];
-                if (item.is_compositable() && sentence_terminal(item.current32())) {
-                    sentence_end = i + 1;
-                    break;
-                }
-            }
-
-            FeedbackRecord record;
-            record.bopomofo = corrected_item.feedback_bopomofo;
-            utf8::append16(*corrected_item.feedback_original, record.original);
-            utf8::append16(corrected_item.current32(), record.selected);
-            for (size_t i = sentence_start; i < sentence_end; ++i) {
-                record.sentence += buffer[i].current();
-            }
-            records.push_back(std::move(record));
+            padding.tone = *tone_number;
+            record.padding.push_back(std::move(padding));
         }
-        return records;
+
+        return record;
     }
 };
 

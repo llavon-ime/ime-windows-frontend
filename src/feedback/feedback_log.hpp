@@ -1,21 +1,28 @@
 #pragma once
 
 #include <filesystem>
-#include <span>
+#include <optional>
 #include <string>
+#include <vector>
 
 namespace tsf {
 
+struct FeedbackPadding {
+    std::u16string syllable;
+    int tone = 1;
+};
+
 struct FeedbackRecord {
-    std::u16string bopomofo;
-    std::u16string original;
-    std::u16string selected;
-    std::u16string sentence;
+    std::u16string context;
+    std::u16string answer;
+    std::vector<FeedbackPadding> padding;
+    int difficulty = 1;
 };
 
 class FeedbackLog final {
 public:
-    static bool append(std::span<const FeedbackRecord> records) noexcept;
+    static std::optional<std::string> serialize(const FeedbackRecord& record) noexcept;
+    static bool append(const FeedbackRecord& record) noexcept;
     static std::filesystem::path path() noexcept;
 };
 
